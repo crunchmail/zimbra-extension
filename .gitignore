@@ -1,0 +1,6 @@
+.classpath
+.zimbra-jars/
+*.class
+
+build.properties
+build/

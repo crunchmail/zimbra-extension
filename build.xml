@@ -1,0 +1,101 @@
+<!--
+
+Generalized Zimbra server extension Ant buildfile.
+
+Needs jsch-libraries for the deployment tasks.
+
+-->
+
+<project name="Serverextension" default="jar">
+
+    <description>Building and deployment of a Zimbra Server extension</description>
+
+    <!-- Read in site properties -->
+
+    <property file="build.properties" />
+
+    <!-- Fill up empty properties with distribution properties -->
+
+    <property file="build.properties.dist" />
+
+    <path id="class.path">
+        <pathelement location="${common.classes.dir}" />
+        <pathelement location="${zimbraServer.classes.dir}"/>
+        <pathelement location="${zimbraSoap.classes.dir}"/>
+        <pathelement location="${zimbraClient.classes.dir}"/>
+        <fileset dir="${common.jars.dir}">
+            <include name="**/*.jar"/>
+        </fileset>
+        <fileset dir="${zimbraServer.jars.dir}">
+            <include name="**/*.jar"/>
+        </fileset>
+        <fileset dir="${zimbraSoap.jars.dir}">
+            <include name="**/*.jar"/>
+        </fileset>
+    </path>
+
+    <target name="bootstrap" description="Install missing jars">
+        <mkdir dir="${user.home}/.ant/lib"/>
+        <get src="http://central.maven.org/maven2/com/jcraft/jsch/0.1.53/jsch-0.1.53.jar" dest="${user.home}/.ant/lib/jsch.jar"/>
+        <get src="http://central.maven.org/maven2/org/apache/ant/ant-jsch/1.8.1/ant-jsch-1.8.1.jar" dest="${user.home}/.ant/lib/ant-jsch.jar"/>
+    </target>
+
+    <target name="compile" description="Compiles the source code">
+        <path id="all.java.path">
+            <pathelement location="src" />
+        </path>
+
+        <mkdir dir="${build.dir}" />
+
+        <javac includeantruntime="false" destdir="${build.dir}" debug="true"
+            classpathref="class.path">
+            <src refid="all.java.path" />
+        </javac>
+    </target>
+
+    <target name="jar" depends="compile" description="Creates the jar file">
+        <loadresource property="dist.slug">
+            <propertyresource name="dist.name"/>
+            <filterchain>
+                <tokenfilter>
+                    <replacestring from="." to="_"/>
+                </tokenfilter>
+            </filterchain>
+        </loadresource>
+
+        <property name="dist.jarfile" value="${dist.slug}.jar"/>
+
+        <jar manifest="${project.manifest}"
+            destfile="${dist.dir}/${dist.jarfile}" basedir="${build.dir}" />
+    </target>
+
+    <target name="deploy" depends="jar"
+            description="Transfers the jar to the server">
+
+        <property name="deploy.path" value="/opt/zimbra/lib/ext/${dist.slug}"/>
+
+        <sshexec host="${deploy.host}" trust="true"
+            username="${deploy.username}" keyfile="${deploy.keyfile}"
+            command="mkdir ${deploy.path}" failonerror="false"/>
+
+        <scp file="${dist.dir}/${dist.jarfile}" trust="true"
+            todir="${deploy.username}@${deploy.host}:${deploy.path}"
+            keyfile="${deploy.keyfile}"/>
+
+    </target>
+
+    <target name="deployrestart" depends="deploy"
+        description="Deploy the jar file and restart mailboxd">
+
+        <sshexec host="${deploy.host}" trust="true"
+            username="root" keyfile="${deploy.keyfile}"
+            command="${deploy.restartmailboxd}"/>
+
+    </target>
+
+    <target name="clean">
+        <delete dir="${build.dir}" failonerror="false"/>
+        <delete dir="${dist.dir}" failonerror="false"/>
+    </target>
+
+</project>
