@@ -33,5 +33,10 @@ public class CrunchmailDocumentService implements DocumentService{
             new GetContacts()
         );
 
+        dispatcher.registerHandler(
+            QName.get("GetContactsTreeRequest", namespace),
+            new GetContactsTree()
+        );
+
     }
 }

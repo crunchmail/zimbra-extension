@@ -20,67 +20,72 @@ import com.crunchmail.extension.ContactsFetcher;
 import com.crunchmail.extension.ListsFetcher;
 import com.crunchmail.extension.soap.ResponseHelpers;
 
-/**
- * Get the contact and distributions lists for the account,
- * formatted for use within the zimlet's iFrame
- *
- * <GetContactsRequest xmlns="urn:crunchmail" />
- *
- * <GetContactsResponse>
- *   (<contacts email="contact-email" name="contact-name"
- *              sourceRef="contact:AccountId:ContactId"
- *              sourceType="zimbra">
- *        <properties [firstName=""] [lastName=""] [...] />
- *       ([<tags name="tag-name"/>])*
- *   </contacts>)*
- *   (<groups name="group-name">
- *       (<members email="contact-email" sourceType="zimbra"
- *                 sourceRef="group:AccountId:GroupId">
- *           <properties [firstName=""] [lastName=""] [...] />
- *       </members>)*
- *      ([<tags name="tag-name"/>])*
- *   </groups>)*
- *   (<dls name="group-name">
- *       (<members email="contact-email" sourceType="zimbra"
- *                 sourceRef="dl:list-email">
- *           <properties [firstName=""] [lastName=""] />
- *       </members>)*
- *   </dls>)*
- *   (<tags name="tag-name" color="HEX color" />)*
- * </GetContactsResponse>
- *
- * If the date differed, something went wrong.
- */
-public class GetContacts extends DocumentHandler {
+
+public class GetContactsTree extends DocumentHandler {
 
     // private boolean asTree;
     private Logger logger = new Logger();
     private ResponseHelpers helpers = new ResponseHelpers();
 
-    private void handleContacts(Mailbox mbox, Account account, Element response) throws ServiceException {
-        ContactsFetcher fetcher = new ContactsFetcher(mbox, account);
-        Map<String, Set<HashMap<String, Object>>> collection = fetcher.fetchCollection();
+    private void recurseTree(Element el, String name, HashMap<String, Object> entry) throws ServiceException {
+        Element f = el.addUniqueElement(name);
 
-        Set<HashMap<String, Object>> contactsCollection = collection.get("contacts");
-        if (contactsCollection.isEmpty()) {
+        @SuppressWarnings("unchecked")
+        Set<HashMap<String, Object>> contacts = (Set<HashMap<String, Object>>) entry.get("contacts");
+        if (contacts.isEmpty()) {
             // add it anyway so client doesn't have to test
-            response.addNonUniqueElement("contacts");
+            f.addNonUniqueElement("contacts");
         } else {
-            for (HashMap<String, Object> contact : contactsCollection) {
-                Element c = response.addNonUniqueElement("contacts");
+            for (HashMap<String, Object> contact : contacts) {
+                Element c = f.addNonUniqueElement("contacts");
                 helpers.makeContactElement(c, contact);
             }
         }
 
-        Set<HashMap<String, Object>> groupsCollection = collection.get("groups");
-        if (groupsCollection.isEmpty()) {
+        @SuppressWarnings("unchecked")
+        Set<HashMap<String, Object>> groups = (Set<HashMap<String, Object>>) entry.get("groups");
+        if (groups.isEmpty()) {
             // add it anyway so client doesn't have to test
-            response.addNonUniqueElement("groups");
+            f.addNonUniqueElement("groups");
         } else {
-            for (HashMap<String, Object> group : groupsCollection) {
-                Element g = response.addNonUniqueElement("groups");
+            for (HashMap<String, Object> group : groups) {
+                Element g = f.addNonUniqueElement("groups");
                 helpers.makeGroupElement(g, group);
             }
+        }
+
+        Element a = f.addUniqueElement("_attrs");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> attrs = (Map<String, Object>) entry.get("_attrs");
+        for (Map.Entry<String, Object> attr : attrs.entrySet()) {
+            if (attr.getValue() instanceof String) {
+                a.addAttribute(attr.getKey(), (String) attr.getValue());
+            } else if (attr.getValue() instanceof Boolean) {
+                a.addAttribute(attr.getKey(), (Boolean) attr.getValue());
+            }
+        }
+
+        Element s = f.addUniqueElement("_subfolders");
+
+        @SuppressWarnings("unchecked")
+        HashMap<String, Object> subfolders = (HashMap<String, Object>) entry.get("_subfolders");
+        for (Map.Entry<String, Object> subfolder : subfolders.entrySet()) {
+            @SuppressWarnings("unchecked")
+            HashMap<String, Object> value = (HashMap<String, Object>) subfolder.getValue();
+            recurseTree(s, subfolder.getKey(), value);
+        }
+    }
+
+    private void handleTree(Mailbox mbox, Account account, Element response) throws ServiceException {
+        ContactsFetcher fetcher = new ContactsFetcher(mbox, account);
+        Map<String, Object> tree = fetcher.fetchTree();
+
+        Element t = response.addUniqueElement("tree");
+
+        for (Map.Entry<String, Object> entry : tree.entrySet()) {
+            @SuppressWarnings("unchecked")
+            HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
+            recurseTree(t, entry.getKey(), value);
         }
     }
 
@@ -120,7 +125,7 @@ public class GetContacts extends DocumentHandler {
 
         Element response = zsc.createElement("GetContactsResponse");
 
-        handleContacts(mbox, account, response);
+        handleTree(mbox, account, response);
         handleLists(account, response);
 
         OperationContext octxt = new OperationContext(mbox);
@@ -135,6 +140,5 @@ public class GetContacts extends DocumentHandler {
         logger.info(response.prettyPrint());
 
         return response;
-
     }
 }

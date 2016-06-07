@@ -32,6 +32,9 @@ Needs jsch-libraries for the deployment tasks.
         <fileset dir="${zimbraSoap.jars.dir}">
             <include name="**/*.jar"/>
         </fileset>
+        <!-- <fileset dir="lib">
+            <include name="*.jar"/>
+        </fileset> -->
     </path>
 
     <target name="bootstrap" description="Install missing jars">
@@ -66,7 +69,9 @@ Needs jsch-libraries for the deployment tasks.
         <property name="dist.jarfile" value="${dist.slug}.jar"/>
 
         <jar manifest="${project.manifest}"
-            destfile="${dist.dir}/${dist.jarfile}" basedir="${build.dir}" />
+            destfile="${dist.dir}/${dist.jarfile}" basedir="${build.dir}">
+            <!-- <zipgroupfileset dir="lib" includes="*.jar" /> -->
+        </jar>
     </target>
 
     <target name="deploy" depends="jar"
