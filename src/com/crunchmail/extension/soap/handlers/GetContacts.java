@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.HashMap;
+import com.google.common.base.Stopwatch;
 
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.common.soap.Element;
@@ -59,9 +60,9 @@ public class GetContacts extends DocumentHandler {
 
     private void handleContacts(Mailbox mbox, Account account, Element response) throws ServiceException {
         ContactsFetcher fetcher = new ContactsFetcher(mbox, account);
-        Map<String, Set<HashMap<String, Object>>> collection = fetcher.fetchCollection();
+        Map<String, List<HashMap<String, Object>>> collection = fetcher.fetchCollection();
 
-        Set<HashMap<String, Object>> contactsCollection = collection.get("contacts");
+        List<HashMap<String, Object>> contactsCollection = collection.get("contacts");
         if (contactsCollection.isEmpty()) {
             // add it anyway so client doesn't have to test
             response.addNonUniqueElement("contacts");
@@ -72,7 +73,7 @@ public class GetContacts extends DocumentHandler {
             }
         }
 
-        Set<HashMap<String, Object>> groupsCollection = collection.get("groups");
+        List<HashMap<String, Object>> groupsCollection = collection.get("groups");
         if (groupsCollection.isEmpty()) {
             // add it anyway so client doesn't have to test
             response.addNonUniqueElement("groups");
@@ -111,8 +112,10 @@ public class GetContacts extends DocumentHandler {
      * @throws ServiceException
      */
     @Override
-    public Element handle(Element request, Map<String, Object> context)
-        throws ServiceException {
+    public Element handle(Element request, Map<String, Object> context) throws ServiceException {
+
+        // We time fetch exec time to return it to the client
+        Stopwatch timer = new Stopwatch().start();
 
         ZimbraSoapContext zsc = getZimbraSoapContext(context);
         Mailbox mbox = getRequestedMailbox(zsc);
@@ -132,7 +135,13 @@ public class GetContacts extends DocumentHandler {
             t.addAttribute("color", tag.getRgbColor().toString());
         }
 
-        logger.info(response.prettyPrint());
+        // stop timing
+        timer.stop();
+
+        response.addUniqueElement("timer").addText(timer.toString());
+        logger.info("Fetched contacts in: "+timer);
+
+        logger.debug(response.prettyPrint());
 
         return response;
 

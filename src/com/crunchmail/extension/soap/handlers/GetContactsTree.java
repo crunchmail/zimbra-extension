@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.HashMap;
+import com.google.common.base.Stopwatch;
 
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.common.soap.Element;
@@ -116,8 +117,10 @@ public class GetContactsTree extends DocumentHandler {
      * @throws ServiceException
      */
     @Override
-    public Element handle(Element request, Map<String, Object> context)
-        throws ServiceException {
+    public Element handle(Element request, Map<String, Object> context) throws ServiceException {
+
+        // We time fetch exec time to return it to the client
+        Stopwatch timer = new Stopwatch().start();
 
         ZimbraSoapContext zsc = getZimbraSoapContext(context);
         Mailbox mbox = getRequestedMailbox(zsc);
@@ -137,7 +140,13 @@ public class GetContactsTree extends DocumentHandler {
             t.addAttribute("color", tag.getRgbColor().toString());
         }
 
-        logger.info(response.prettyPrint());
+        // stop timing
+        timer.stop();
+
+        response.addAttribute("timer", timer.toString());
+        logger.info("Fetched contacts in: "+timer);
+
+        logger.debug(response.prettyPrint());
 
         return response;
     }

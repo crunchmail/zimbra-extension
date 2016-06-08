@@ -37,196 +37,29 @@ import com.crunchmail.extension.UserSettings;
  */
 public class ContactsFetcher {
 
-    /**
-     * Internal Crawler class for actual data retrieval from mailbox
-     */
-    private static class Crawler {
-
-        private Logger logger = new Logger();
-
-        private Mailbox mbox;
-        private OperationContext octxt;
-        private boolean includeShared;
-        private boolean asTree;
-
-        public List<Contact> contactsCollection;
-        public List<HashMap<String, Object>> groupsCollection;
-        HashMap<String, Object> addressBookTree;
-
-        public Crawler(Mailbox mbox, boolean includeShared) throws ServiceException {
-            this.mbox = mbox;
-            octxt = new OperationContext(mbox);
-            this.includeShared = includeShared;
-
-            contactsCollection = new ArrayList<Contact>();
-            groupsCollection = new ArrayList<HashMap<String, Object>>();
-            addressBookTree = new HashMap<String, Object>();
-        }
-
-        private HashMap<String, Object> handleContactGroup(Contact contact, Mailbox mbx) throws ServiceException {
-            HashMap<String, Object> groupObj = new HashMap<String, Object>();
-            String encodedGroupMembers = contact.get(ContactConstants.A_groupMember);
-            try {
-                List<Object> groupMembers = new ArrayList<Object>();
-
-                ContactGroup group = ContactGroup.init(encodedGroupMembers);
-                group.derefAllMembers(mbx, octxt);
-                List<Member> members = group.getMembers(true);
-
-                for (Member member : members) {
-                    groupMembers.add(member.getDerefedObj());
-                }
-
-                groupObj.put("group", contact);
-                groupObj.put("members", groupMembers);
-            } catch (ServiceException e) {
-                logger.warn("Unable to decode contact group", e);
-            }
-
-            return groupObj;
-        }
-
-        private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
-            // This is the mose commonly used version.
-            // Parameter nodeName is only passed when folder is a mountpoint
-            // to get the actual displayed name
-            return handleFolderContent(f, mbx, treeNode, f.getName());
-        }
-
-        private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode, String nodeName) throws ServiceException {
-
-            // Make tree entry if necessary
-            @SuppressWarnings("unchecked")
-            HashMap<String, Object> treeEntry = (HashMap<String, Object>) treeNode.get(f.getName());
-            if (treeEntry == null) {
-                treeEntry = new HashMap<String, Object>();
-
-                HashMap<String, Object> attrs = new HashMap<String, Object>();
-                attrs.put("isShare", mbx != mbox);
-                attrs.put("color", f.getRgbColor().toString());
-                treeEntry.put("_attrs", attrs);
-
-                treeEntry.put("_subfolders", new HashMap<String, Object>());
-                treeEntry.put("contacts_index", new ArrayList<Integer>());
-                treeEntry.put("groups_index", new ArrayList<Integer>());
-
-                treeNode.put(f.getName(), treeEntry);
-            }
-
-            // This will return contacts and contact groups
-            List<Contact> contacts = mbx.getContactList(octxt, f.getId(), SortBy.NAME_ASC);
-
-            for (Contact contact : contacts) {
-                if (contact.isContactGroup()) {
-
-                    HashMap<String, Object> groupObj = handleContactGroup(contact, mbx);
-                    groupsCollection.add(groupObj);
-                    int index = groupsCollection.indexOf(groupObj);
-
-                    @SuppressWarnings("unchecked")
-                    List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
-                    groups_index.add(index);
-
-                } else {
-
-                    contactsCollection.add(contact);
-                    int index = contactsCollection.indexOf(contact);
-
-                    @SuppressWarnings("unchecked")
-                    List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
-                    contacts_index.add(index);
-
-                }
-            }
-
-            @SuppressWarnings("unchecked")
-            HashMap<String, Object> subfolders = (HashMap<String, Object>) treeEntry.get("_subfolders");
-
-            return subfolders;
-        }
-
-        private boolean isAddressBook(Folder folder) {
-            if (folder.getId() == Mailbox.ID_FOLDER_AUTO_CONTACTS) {
-                // We ignore "Emailed Contacts"
-                return false;
-            }
-            return (folder.getDefaultView() == MailItem.Type.CONTACT);
-        }
-
-        private void handleFolderNode(FolderNode node, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
-            if (isAddressBook(node.mFolder) || node.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
-                if (node.mFolder.getId() != Mailbox.ID_FOLDER_USER_ROOT) {
-                    logger.info(node.mName);
-                    if (node.mFolder.getType() == MailItem.Type.MOUNTPOINT) {
-                        // this is a mountpoint
-                        if(includeShared) {
-                            Mountpoint mp = mbx.getMountpointById(octxt, node.mFolder.getId());
-                            // Get all the elements necessary
-                            String oid = mp.getOwnerId();
-                            ItemId iid = mp.getTarget();
-                            Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(oid);
-
-                            try {
-                                // will throw an exception if current user does not have sufficient permissions on owner's object
-                                FolderNode sharedFolder = rmbox.getFolderTree(octxt, iid, true);
-                                HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName());
-
-                                for (FolderNode subnode : sharedFolder.mSubfolders) {
-                                    handleFolderNode(subnode, rmbox, subtree);
-                                }
-                            } catch (ServiceException e) {
-                                if (e.getCode().equals(ServiceException.PERM_DENIED)) {
-                                    // if it is a permission denied, fail gracefully
-                                    logger.info("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
-                                } else {
-                                    // re-raise
-                                    throw e;
-                                }
-                            }
-                        }
-                    } else {
-                        HashMap<String, Object> subtree = handleFolderContent(node.mFolder, mbx, treeNode);
-
-                        // Keep crawling local subtree
-                        for (FolderNode subnode : node.mSubfolders) {
-                            handleFolderNode(subnode, mbx, subtree);
-                        }
-                    }
-                } else {
-                    // This is only used on first run (node is ROOT)
-                    // do nothing more than launch the crawl
-                    for (FolderNode subnode : node.mSubfolders) {
-                        handleFolderNode(subnode, mbx, treeNode);
-                    }
-                }
-            }
-        }
-
-        public void crawlContacts() throws ServiceException {
-            ItemId root = new ItemId(mbox.getAccount().getId(), Mailbox.ID_FOLDER_USER_ROOT);
-            FolderNode tree = mbox.getFolderTree(octxt, root, true);
-            handleFolderNode(tree, mbox, addressBookTree);
-        }
-    }
-
-    /**
-     * ContactsFetcher attributes and methods
-     */
     private Logger logger = new Logger();
+    private Mailbox mbox;
+    private OperationContext octxt;
     private UserSettings settings;
-    private Crawler crawler;
+    // private boolean includeShared;
+    // private Crawler crawler;
+
+    private List<HashMap<String, Object>> contactsCollection;
+    private List<HashMap<String, Object>> groupsCollection;
+    HashMap<String, Object> addressBookTree;
 
     public ContactsFetcher(Mailbox mbox, Account account) throws ServiceException {
+        this.mbox = mbox;
+        octxt = new OperationContext(mbox);
         settings = new UserSettings(account);
-        crawler = new Crawler(mbox, settings.getBool(UserSettings.INCLUDE_SHARED));
+        contactsCollection = new ArrayList<HashMap<String, Object>>();
+        groupsCollection = new ArrayList<HashMap<String, Object>>();
+        addressBookTree = new HashMap<String, Object>();
+        // crawler = new Crawler(mbox, settings.getBool(UserSettings.INCLUDE_SHARED));
     }
 
     private HashMap<String, Object> makeContactObj(Contact contact) throws ServiceException {
         String ref = "contact:" + contact.getAccount().getId() + ':' + contact.getId();
-        return makeContactObj(contact, ref, false);
-    }
-
-    private HashMap<String, Object> makeContactObj(Contact contact, String ref) throws ServiceException {
         return makeContactObj(contact, ref, false);
     }
 
@@ -358,48 +191,167 @@ public class ContactsFetcher {
      * }
      *
      */
-    private HashMap<String, Object> makeGroupObj(HashMap<String, Object> group) throws ServiceException {
+    private HashMap<String, Object> makeGroupObj(Contact group, Mailbox mbx) throws ServiceException {
         HashMap<String, Object> groupObj = new HashMap<String, Object>();
 
-        Contact groupDetails = (Contact) group.get("group");
-        groupObj.put("name", groupDetails.getFileAsString());
-        groupObj.put("tags", groupDetails.getTags());
-        groupObj.put("members", new ArrayList<HashMap<String, Object>>());
+        String encodedGroupMembers = group.get(ContactConstants.A_groupMember);
 
-        // Use a reference to add object in the loop below
-        @SuppressWarnings("unchecked")
-        List<HashMap<String, Object>> groupMembers = (List<HashMap<String, Object>>) groupObj.get("members");
+        try {
+            List<HashMap<String, Object>> groupMembers = new ArrayList<HashMap<String, Object>>();
 
-        @SuppressWarnings("unchecked")
-        List<Object> members = (List<Object>) group.get("members");
-        for (Object member : members) {
-            // build contact entry
-            if (member != null) {
-                String ref = "group:" + groupDetails.getAccount().getId() + ':' + groupDetails.getId();
-                HashMap<String, Object> contactObj = makeContactObj(member, ref, true);
-                groupMembers.add(contactObj);
+            ContactGroup contactGroup = ContactGroup.init(encodedGroupMembers);
+
+            contactGroup.derefAllMembers(mbx, octxt);
+            List<Member> members = contactGroup.getMembers(true);
+
+            for (Member member : members) {
+                Object memberObj = member.getDerefedObj();
+                // build contact entry
+                if (member != null) {
+                    String ref = "group:" + group.getAccount().getId() + ':' + group.getId();
+                    HashMap<String, Object> contactObj = makeContactObj(member, ref, true);
+                    groupMembers.add(contactObj);
+                }
             }
+
+            groupObj.put("members", groupMembers);
+            groupObj.put("name", group.getFileAsString());
+            groupObj.put("tags", group.getTags());
+
+        } catch (ServiceException e) {
+            logger.warn("Unable to decode contact group", e);
         }
 
         return groupObj;
     }
 
-    public Map<String, Set<HashMap<String, Object>>> fetchCollection() throws ServiceException {
-        HashMap<String, Set<HashMap<String, Object>>> collection = new HashMap<String, Set<HashMap<String, Object>>>();
-        Set<HashMap<String, Object>> contactsCollection = new HashSet<HashMap<String, Object>>();
-        Set<HashMap<String, Object>> groupsCollection = new HashSet<HashMap<String, Object>>();
+    private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
+        // This is the mose commonly used version.
+        // Parameter nodeName is only passed when folder is a mountpoint
+        // to get the actual displayed name
+        return handleFolderContent(f, mbx, treeNode, f.getName());
+    }
 
-        crawler.crawlContacts();
+    private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode, String nodeName) throws ServiceException {
 
-        for (Contact contact : crawler.contactsCollection) {
-            HashMap<String, Object> contactObj = makeContactObj(contact);
-            contactsCollection.add(contactObj);
+        // Make tree entry if necessary
+        @SuppressWarnings("unchecked")
+        HashMap<String, Object> treeEntry = (HashMap<String, Object>) treeNode.get(f.getName());
+        if (treeEntry == null) {
+            treeEntry = new HashMap<String, Object>();
+
+            HashMap<String, Object> attrs = new HashMap<String, Object>();
+            attrs.put("isShare", mbx != mbox);
+            attrs.put("color", f.getRgbColor().toString());
+            treeEntry.put("_attrs", attrs);
+
+            treeEntry.put("_subfolders", new HashMap<String, Object>());
+            treeEntry.put("contacts_index", new ArrayList<Integer>());
+            treeEntry.put("groups_index", new ArrayList<Integer>());
+
+            treeNode.put(f.getName(), treeEntry);
         }
 
-        for (HashMap<String, Object> group : crawler.groupsCollection) {
-            HashMap<String, Object> groupObj = makeGroupObj(group);
-            groupsCollection.add(groupObj);
+        // This will return contacts and contact groups
+        List<Contact> contacts = mbx.getContactList(octxt, f.getId(), SortBy.NAME_ASC);
+
+        for (Contact contact : contacts) {
+            if (contact.isContactGroup()) {
+
+                HashMap<String, Object> groupObj = makeGroupObj(contact, mbx);
+                groupsCollection.add(groupObj);
+                int index = groupsCollection.indexOf(groupObj);
+
+                @SuppressWarnings("unchecked")
+                List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
+                groups_index.add(index);
+
+            } else {
+
+                HashMap<String, Object> contactObj = makeContactObj(contact);
+                contactsCollection.add(contactObj);
+                int index = contactsCollection.indexOf(contactObj);
+
+                @SuppressWarnings("unchecked")
+                List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
+                contacts_index.add(index);
+
+            }
         }
+
+        @SuppressWarnings("unchecked")
+        HashMap<String, Object> subfolders = (HashMap<String, Object>) treeEntry.get("_subfolders");
+
+        return subfolders;
+    }
+
+    private boolean isAddressBook(Folder folder) {
+        if (folder.getId() == Mailbox.ID_FOLDER_AUTO_CONTACTS) {
+            // We ignore "Emailed Contacts"
+            return false;
+        }
+        return (folder.getDefaultView() == MailItem.Type.CONTACT);
+    }
+
+    private void handleFolderNode(FolderNode node, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
+        if (isAddressBook(node.mFolder) || node.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
+            if (node.mFolder.getId() != Mailbox.ID_FOLDER_USER_ROOT) {
+                logger.info(node.mName);
+                if (node.mFolder.getType() == MailItem.Type.MOUNTPOINT) {
+                    // this is a mountpoint
+                    if(settings.getBool(UserSettings.INCLUDE_SHARED)) {
+                        Mountpoint mp = mbx.getMountpointById(octxt, node.mFolder.getId());
+                        // Get all the elements necessary
+                        String oid = mp.getOwnerId();
+                        ItemId iid = mp.getTarget();
+                        Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(oid);
+
+                        try {
+                            // will throw an exception if current user does not have sufficient permissions on owner's object
+                            FolderNode sharedFolder = rmbox.getFolderTree(octxt, iid, true);
+                            HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName());
+
+                            for (FolderNode subnode : sharedFolder.mSubfolders) {
+                                handleFolderNode(subnode, rmbox, subtree);
+                            }
+                        } catch (ServiceException e) {
+                            if (e.getCode().equals(ServiceException.PERM_DENIED)) {
+                                // if it is a permission denied, fail gracefully
+                                logger.info("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
+                            } else {
+                                // re-raise
+                                throw e;
+                            }
+                        }
+                    }
+                } else {
+                    HashMap<String, Object> subtree = handleFolderContent(node.mFolder, mbx, treeNode);
+
+                    // Keep crawling local subtree
+                    for (FolderNode subnode : node.mSubfolders) {
+                        handleFolderNode(subnode, mbx, subtree);
+                    }
+                }
+            } else {
+                // This is only used on first run (node is ROOT)
+                // do nothing more than launch the crawl
+                for (FolderNode subnode : node.mSubfolders) {
+                    handleFolderNode(subnode, mbx, treeNode);
+                }
+            }
+        }
+    }
+
+    private void crawlContacts() throws ServiceException {
+        ItemId root = new ItemId(mbox.getAccount().getId(), Mailbox.ID_FOLDER_USER_ROOT);
+        FolderNode tree = mbox.getFolderTree(octxt, root, true);
+        handleFolderNode(tree, mbox, addressBookTree);
+    }
+
+    public Map<String, List<HashMap<String, Object>>> fetchCollection() throws ServiceException {
+        HashMap<String, List<HashMap<String, Object>>> collection = new HashMap<String, List<HashMap<String, Object>>>();
+
+        crawlContacts();
 
         collection.put("contacts", contactsCollection);
         collection.put("groups", groupsCollection);
@@ -409,24 +361,20 @@ public class ContactsFetcher {
     private void recurseTree(HashMap<String, Object> entry) throws ServiceException {
         @SuppressWarnings("unchecked")
         List<Integer> contacts_index = (List<Integer>) entry.get("contacts_index");
-        Set<HashMap<String, Object>> contactsCollection = new HashSet<HashMap<String, Object>>();
+        Set<HashMap<String, Object>> treeNodeContacts = new HashSet<HashMap<String, Object>>();
         for (int index : contacts_index) {
-            Contact contact = crawler.contactsCollection.get(index);
-            HashMap<String, Object> contactObj = makeContactObj(contact);
-            contactsCollection.add(contactObj);
+            treeNodeContacts.add(contactsCollection.get(index));
         }
-        entry.put("contacts", contactsCollection);
+        entry.put("contacts", treeNodeContacts);
         entry.remove("contacts_index");
 
         @SuppressWarnings("unchecked")
         List<Integer> groups_index = (List<Integer>) entry.get("groups_index");
-        Set<HashMap<String, Object>> groupsCollection = new HashSet<HashMap<String, Object>>();
+        Set<HashMap<String, Object>> treeNodeGroups = new HashSet<HashMap<String, Object>>();
         for (int index : groups_index) {
-            HashMap<String, Object> group = crawler.groupsCollection.get(index);
-            HashMap<String, Object> groupObj = makeGroupObj(group);
-            groupsCollection.add(groupObj);
+            treeNodeGroups.add(groupsCollection.get(index));
         }
-        entry.put("groups", groupsCollection);
+        entry.put("groups", treeNodeGroups);
         entry.remove("groups_index");
 
         @SuppressWarnings("unchecked")
@@ -440,19 +388,19 @@ public class ContactsFetcher {
 
     public Map<String, Object> fetchTree() throws ServiceException {
 
-        crawler.crawlContacts();
+        crawlContacts();
 
-        logger.info("Tree"+crawler.addressBookTree);
+        logger.info("Tree: "+addressBookTree);
 
-        for (Map.Entry<String, Object> entry : crawler.addressBookTree.entrySet()) {
+        for (Map.Entry<String, Object> entry : addressBookTree.entrySet()) {
             @SuppressWarnings("unchecked")
             HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
             recurseTree(value);
         }
 
-        logger.info("Tree"+crawler.addressBookTree);
+        logger.info("Tree: "+addressBookTree);
 
-        return crawler.addressBookTree;
+        return addressBookTree;
     }
 
 }
