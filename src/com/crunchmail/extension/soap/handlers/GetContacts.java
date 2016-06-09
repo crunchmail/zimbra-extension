@@ -138,7 +138,7 @@ public class GetContacts extends DocumentHandler {
         // stop timing
         timer.stop();
 
-        response.addUniqueElement("timer").addText(timer.toString());
+        response.addAttribute("timer", timer.toString());
         logger.info("Fetched contacts in: "+timer);
 
         logger.debug(response.prettyPrint());
