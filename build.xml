@@ -6,7 +6,28 @@ Needs jsch-libraries for the deployment tasks.
 
 -->
 
-<project name="Serverextension" default="jar">
+<project name="Serverextension"
+         default="jar"
+         xmlns:if="ant:if"
+         xmlns:unless="ant:unless">
+
+    <!-- Taskdefs for third-party ant libs -->
+
+    <!--
+        This is used to include condtions based on Zimbra versions in our code :
+
+            /* $if ZimbraVersion > 8.0.0 $ */
+            ...
+            /* $else $ */
+            ...
+            /* $endif $ */
+    -->
+    <taskdef name="preprocess" classname="com.objfac.prebop.ant.PreprocessorTask">
+         <classpath>
+             <pathelement location="ant/preprocessor.jar"/>
+         </classpath>
+     </taskdef>
+
 
     <description>Building and deployment of a Zimbra Server extension</description>
 
@@ -18,75 +39,209 @@ Needs jsch-libraries for the deployment tasks.
 
     <property file="build.properties.dist" />
 
-    <path id="class.path">
-        <pathelement location="${common.classes.dir}" />
-        <pathelement location="${zimbraServer.classes.dir}"/>
-        <pathelement location="${zimbraSoap.classes.dir}"/>
-        <pathelement location="${zimbraClient.classes.dir}"/>
-        <fileset dir="${common.jars.dir}">
-            <include name="**/*.jar"/>
-        </fileset>
-        <fileset dir="${zimbraServer.jars.dir}">
-            <include name="**/*.jar"/>
-        </fileset>
-        <fileset dir="${zimbraSoap.jars.dir}">
-            <include name="**/*.jar"/>
-        </fileset>
-        <!-- <fileset dir="lib">
+    <!-- Class and dependencies paths -->
+
+    <path id="libs.local">
+        <fileset dir="lib">
             <include name="*.jar"/>
-        </fileset> -->
+        </fileset>
     </path>
 
-    <target name="bootstrap" description="Install missing jars">
-        <mkdir dir="${user.home}/.ant/lib"/>
-        <get src="http://central.maven.org/maven2/com/jcraft/jsch/0.1.53/jsch-0.1.53.jar" dest="${user.home}/.ant/lib/jsch.jar"/>
-        <get src="http://central.maven.org/maven2/org/apache/ant/ant-jsch/1.8.1/ant-jsch-1.8.1.jar" dest="${user.home}/.ant/lib/ant-jsch.jar"/>
+    <!-- Build env tasks -->
+
+    <target name="gen-classpath" description="Generate .classpath file for given zimbra version">
+        <echo unless:set="zimbra-version">Command must be run with -Dzimbra-version=X.X.X</echo>
+        <fail unless="zimbra-version" />
+        <echo file=".classpath">./lib/*:${zimbra.jars.dir}/${zimbra-version}/*</echo>
+        <echo file=".zimbra_version">${zimbra-version}</echo>
+        <echo>Generated .classpath and .zimbra_version</echo>
     </target>
 
-    <target name="compile" description="Compiles the source code">
-        <path id="all.java.path">
-            <pathelement location="src" />
-        </path>
+    <macrodef name="install-ant-dep">
+        <attribute name="maven-path" />
+        <attribute name="jar-name" />
+        <sequential>
+            <get src="http://central.maven.org/maven2/@{maven-path}/maven-metadata.xml" dest="/tmp/_maven.xml" />
+            <xmlproperty file="/tmp/_maven.xml" keepRoot="true" />
+            <get src="http://central.maven.org/maven2/@{maven-path}/${metadata.versioning.latest}/@{jar-name}-${metadata.versioning.latest}.jar" dest="${user.home}/.ant/lib/@{jar-name}.jar" />
+            <delete file="/tmp/_maven.xml" />
+        </sequential>
+    </macrodef>
 
-        <mkdir dir="${build.dir}" />
+    <target name="init-dev" depends="gen-classpath" description="Install ant build dependencies">
+        <echo>Installing ANT dependencies</echo>
+        <available file="${user.home}/.ant/lib/jsch.jar" type="dir" property="ant.dir" />
+        <available file="${user.home}/.ant/lib/jsch.jar" property="ant.jsch" />
+        <available file="${user.home}/.ant/lib/ant-jsch.jar" property="ant.ant-jsch" />
 
-        <javac includeantruntime="false" destdir="${build.dir}" debug="true"
-            classpathref="class.path">
-            <src refid="all.java.path" />
-        </javac>
+        <mkdir unless:set="ant.dir" dir="${user.home}/.ant/lib" />
+        <install-ant-dep unless:set="ant.jsch" maven-path="com/jcraft/jsch" jar-name="jsch" />
+        <install-ant-dep unless:set="ant.ant-jsch" maven-path="org/apache/ant/ant-jsch" jar-name="ant-jsch" />
     </target>
 
-    <target name="jar" depends="compile" description="Creates the jar file">
-        <loadresource property="dist.slug">
-            <propertyresource name="dist.name"/>
-            <filterchain>
-                <tokenfilter>
-                    <replacestring from="." to="_"/>
-                </tokenfilter>
-            </filterchain>
-        </loadresource>
+    <import file="bump-tasks.xml" />
 
-        <property name="dist.jarfile" value="${dist.slug}.jar"/>
-
-        <jar manifest="${project.manifest}"
-            destfile="${dist.dir}/${dist.jarfile}" basedir="${build.dir}">
-            <!-- <zipgroupfileset dir="lib" includes="*.jar" /> -->
-        </jar>
+    <target name="init">
+        <tstamp />
+        <available file="version" property="version.exists" />
+        <echo unless:set="version.exists" file="version">0.0.0</echo>
+        <loadfile srcFile="version" property="version" failonerror="false" quiet="true" />
+        <echo> Generating Extension BuildInfo - version ${version} </echo>
+        <exec executable="./gen_buildinfo.sh" failonerror="true">
+            <arg value="${dist.src}/BuildInfo.java" />
+            <arg value="${dist.name}" />
+            <arg value="${version}" />
+        </exec>
+        <!-- Also create some properties -->
     </target>
 
-    <target name="deploy" depends="jar"
-            description="Transfers the jar to the server">
+    <macrodef name="gen-slug">
+        <sequential>
+            <loadresource property="slug">
+                <propertyresource name="dist.name"/>
+                <filterchain>
+                    <tokenfilter>
+                        <replacestring from="." to="_"/>
+                    </tokenfilter>
+                </filterchain>
+            </loadresource>
+            <property name="dist.jarfile" value="${slug}.jar"/>
+        </sequential>
+    </macrodef>
 
-        <property name="deploy.path" value="/opt/zimbra/lib/ext/${dist.slug}"/>
+    <!-- Macros to be used by build tasks -->
 
-        <sshexec host="${deploy.host}" trust="true"
-            username="${deploy.username}" keyfile="${deploy.keyfile}"
-            command="mkdir ${deploy.path}" failonerror="false"/>
+    <macrodef name="build-extension">
+        <attribute name="ZimbraVersion" default="${zimbra-version}" />
+        <attribute name="MajorZimbraVersion" default="${zmajor}" />
+        <attribute name="MiddleZimbraVersion" default="${zmiddle}" />
+        <attribute name="MinorZimbraVersion" default="${zminor}" />
+        <attribute name="nojar" default="false" />
 
-        <scp file="${dist.dir}/${dist.jarfile}" trust="true"
-            todir="${deploy.username}@${deploy.host}:${deploy.path}"
-            keyfile="${deploy.keyfile}"/>
+        <sequential>
+            <local name="tmpsrc" />
+            <local name="build" />
+            <local name="dist" />
+            <local name="version" />
+            <property name="tmpsrc"  value="${tmpsrc.dir}/@{ZimbraVersion}/" />
+            <property name="build" value="${build.dir}/@{ZimbraVersion}/" />
+            <property name="dist"  value="${dist.dir}/@{ZimbraVersion}/" />
+            <loadfile srcFile="version" property="version" failonerror="false" quiet="true" />
 
+            <mkdir dir="${tmpsrc}" />
+            <mkdir dir="${build}" />
+            <mkdir dir="${dist}" />
+
+            <echo>Creating extension JAR for zimbra @{ZimbraVersion} ...</echo>
+
+            <echo>Preprocessing...</echo>
+            <preprocess indir="${dist.src}" outdir="${tmpsrc}" out="replace" >
+                <var name="ZimbraVersion" value="@{MajorZimbraVersion}.@{MiddleZimbraVersion}.@{MinorZimbraVersion}" />
+                <var name="MajorZimbraVersion"  value="@{MajorZimbraVersion}" />
+                <var name="MiddleZimbraVersion" value="@{MiddleZimbraVersion}" />
+                <var name="MinorZimbraVersion"  value="@{MinorZimbraVersion}" />
+                <filetype commentend="*/" commentbegin="/*" extensions="java" />
+            </preprocess>
+
+            <javac includeantruntime="false" debug="true"
+                    debuglevel="lines,vars,source"
+                    srcdir="${tmpsrc}" destdir="${build}">
+                <classpath>
+                    <path>
+                        <fileset dir="${zimbra.jars.dir}/@{ZimbraVersion}/">
+                            <include name="*.jar" />
+                        </fileset>
+                    </path>
+                    <path refid="libs.local" />
+                    <pathelement path="${build}" />
+                </classpath>
+                <!-- <compilerarg value="-Xlint:all" /> -->
+                <compilerarg value="-Xlint:none" />
+            </javac>
+
+            <gen-slug />
+
+            <jar unless:true="nojar" manifest="${project.manifest}" destfile="${dist}/${dist.jarfile}" basedir="${build}" duplicate="fail">
+                <zipgroupfileset dir="lib" includes="*.jar" />
+                <manifest>
+                    <attribute name="Specification-Title" value="${dist.fullname}" />
+                    <attribute name="Specification-Version" value="${version}" />
+                    <attribute name="Specification-Vendor" value="${dist.vendor}" />
+                    <attribute name="Implementation-Version" value="@{ZimbraVersion}" />
+                    <attribute name="Created-By" value="${dist.vendor}" />
+                </manifest>
+            </jar>
+        </sequential>
+    </macrodef>
+
+    <!-- Release build targets -->
+
+    <target name="build-8.6.0"
+            description="Create jar for Zimbra 8.6.0"
+            depends="init"
+            extensionOf="build-all">
+        <build-extension ZimbraVersion="8.6.0"
+            MajorZimbraVersion="8"
+            MiddleZimbraVersion="6"
+            MinorZimbraVersion="0" />
+    </target>
+
+    <!-- <target name="build-8.7.0"
+            description="Create jar for Zimbra 8.7.0"
+            depends="init"
+            extensionOf="build-all">
+        <build-extension ZimbraVersion="8.7.0"
+            MajorZimbraVersion="8"
+            MiddleZimbraVersion="7"
+            MinorZimbraVersion="0" />
+    </target> -->
+
+    <extension-point name="build-all" />
+
+    <!-- Dev process targets: lint, compile, deploy, ... -->
+
+    <macrodef name="build">
+        <attribute name="nojar" default="false" />
+        <sequential>
+            <loadfile srcFile=".zimbra_version" property="zimbra-version" failonerror="true" />
+            <script language="javascript">
+                <![CDATA[
+                // needs this for split to work...
+                zimbra_version = String(new java.lang.String(project.getProperty('zimbra-version')));
+                arr = zimbra_version.split('.');
+                project.setProperty('zmajor', arr[0]);
+                project.setProperty('zmiddle', arr[1]);
+                project.setProperty('zminor', arr[2]);
+                ]]>
+            </script>
+                <build-extension nojar="@{nojar}" />
+        </sequential>
+    </macrodef>
+
+    <target name="lint" description="Compiles sources for linting">
+        <build nojar="true"/>
+    </target>
+
+    <target name="compile" description="Compiles and create jar">
+        <build />
+    </target>
+
+    <target name="deploy" description="Transfers the jar to the server">
+
+        <sequential>
+            <build />
+            <gen-slug />
+
+            <property name="deploy.path" value="/opt/zimbra/lib/ext/${slug}"/>
+
+            <sshexec host="${deploy.host}" trust="true"
+                username="${deploy.username}" keyfile="${deploy.keyfile}"
+                command="mkdir -p ${deploy.path}" failonerror="false"/>
+
+            <scp file="${dist.dir}/${zimbra-version}/${dist.jarfile}" trust="true"
+                todir="${deploy.username}@${deploy.host}:${deploy.path}"
+                keyfile="${deploy.keyfile}"/>
+        </sequential>
     </target>
 
     <target name="deployrestart" depends="deploy"
@@ -95,12 +250,14 @@ Needs jsch-libraries for the deployment tasks.
         <sshexec host="${deploy.host}" trust="true"
             username="root" keyfile="${deploy.keyfile}"
             command="${deploy.restartmailboxd}"/>
-
     </target>
 
-    <target name="clean">
-        <delete dir="${build.dir}" failonerror="false"/>
-        <delete dir="${dist.dir}" failonerror="false"/>
+    <target name="clean" description="Build directories cleanup">
+        <delete includeemptydirs="true">
+            <fileset dir="${tmpsrc.dir}" includes="**/*" />
+            <fileset dir="${build.dir}" includes="**/*" />
+            <fileset dir="${dist.dir}" includes="**/*" />
+        </delete>
     </target>
 
 </project>

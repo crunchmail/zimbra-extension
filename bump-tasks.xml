@@ -1,0 +1,108 @@
+<project name="bump">
+<!--
+
+****************************************************************************
+Version-management targets
+****************************************************************************
+
+-->
+<target name="bump-major">
+    <bump type="major" />
+</target>
+<target name="bump-minor">
+    <bump type="minor" />
+</target>
+<target name="bump-patch">
+    <bump type="patch" />
+</target>
+
+<!-- Read current version from file, bumpit and writes back to file -->
+<macrodef name="bump">
+    <attribute name="type" />
+    <sequential>
+        <loadfile srcFile="version" property="version" failonerror="false" quiet="true" />
+        <bumpit version="${version}" bump_type="@{type}" />
+        <echo>Bumping ${version} to ${new_version}</echo>
+        <echo file="version">${new_version}</echo>
+        <!-- <git-commit file="version" comment="bump version v${new_version}" />
+        <git-tag version="v${new_version}" /> -->
+    </sequential>
+</macrodef>
+
+<scriptdef name="bumpit" language="javascript">
+    <attribute name="version" />
+    <attribute name="bump_type" />
+    <![CDATA[
+        // needs this for split to work...
+        version = String(new java.lang.String(attributes.get('version')));
+
+        // version will have this value if file does not exist
+        if (version == '${version}') {
+            version='0.0.0';
+            project.setProperty('version', version);
+        }
+
+        arr = version.split('.');
+        vmajor = arr[0];
+        vminor = arr[1];
+        vpatch = arr[2];
+
+        type = attributes.get('bump_type');
+        if (type == 'major') {
+            vmajor++;
+            vminor = 0;
+            vpatch = 0;
+        } else if (type == 'minor') {
+            vminor++;
+            vpatch = 0;
+        } else if (type == 'patch') {
+            vpatch++;
+        }
+
+        new_version = vmajor+'.'+vminor+'.'+vpatch;
+        project.setProperty('new_version', new_version);
+    ]]>
+</scriptdef>
+
+<macrodef name="git">
+    <attribute name="command" />
+    <element name = "args" optional = "true" />
+    <sequential>
+        <echo message="git @{command}" />
+        <exec executable="git" failonerror="true">
+            <arg value="@{command}" />
+            <args/>
+        </exec>
+    </sequential>
+</macrodef>
+<macrodef name="git-commit">
+    <attribute name="comment" />
+    <attribute name="file" />
+    <sequential>
+        <echo>Commiting @{file} (@{comment})</echo>
+        <git command="add">
+            <args>
+                <arg value="@{file}" />
+            </args>
+        </git>
+        <git command="commit">
+            <args>
+                <arg value="@{file}" />
+                <arg line="-m '@{comment}'" />
+            </args>
+        </git>
+    </sequential>
+</macrodef>
+<macrodef name="git-tag">
+    <attribute name="version" />
+    <sequential>
+        <echo>Tagging with version @{version} </echo>
+        <git command="tag">
+            <args>
+                <arg value="@{version}" />
+            </args>
+        </git>
+    </sequential>
+</macrodef>
+
+</project>
