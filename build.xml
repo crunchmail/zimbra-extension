@@ -7,7 +7,7 @@ Needs jsch-libraries for the deployment tasks.
 -->
 
 <project name="Serverextension"
-         default="jar"
+         default="compile"
          xmlns:if="ant:if"
          xmlns:unless="ant:unless">
 
