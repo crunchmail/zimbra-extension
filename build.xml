@@ -218,11 +218,11 @@ Needs jsch-libraries for the deployment tasks.
         </sequential>
     </macrodef>
 
-    <target name="lint" description="Compiles sources for linting">
+    <target name="lint" depends="init" description="Compiles sources for linting">
         <build nojar="true"/>
     </target>
 
-    <target name="compile" description="Compiles and create jar">
+    <target name="compile" depends="init" description="Compiles and create jar">
         <build />
     </target>
 
