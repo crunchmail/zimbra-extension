@@ -37,7 +37,7 @@ import com.crunchmail.extension.UserSettings;
  */
 public class ContactsFetcher {
 
-    private Logger logger = new Logger();
+    private Logger logger;
     private Mailbox mbox;
     private OperationContext octxt;
     private UserSettings settings;
@@ -49,13 +49,17 @@ public class ContactsFetcher {
     HashMap<String, Object> addressBookTree;
 
     public ContactsFetcher(Mailbox mbox, Account account) throws ServiceException {
+        this(mbox, account, false);
+    }
+
+    public ContactsFetcher(Mailbox mbox, Account account, boolean debug) throws ServiceException {
         this.mbox = mbox;
         octxt = new OperationContext(mbox);
         settings = new UserSettings(account);
         contactsCollection = new ArrayList<HashMap<String, Object>>();
         groupsCollection = new ArrayList<HashMap<String, Object>>();
         addressBookTree = new HashMap<String, Object>();
-        // crawler = new Crawler(mbox, settings.getBool(UserSettings.INCLUDE_SHARED));
+        logger = new Logger(debug);
     }
 
     private HashMap<String, Object> makeContactObj(Contact contact) throws ServiceException {
@@ -90,9 +94,15 @@ public class ContactsFetcher {
         String[] includeFieldsDefault = {ContactConstants.A_firstName, ContactConstants.A_lastName};
         String[] includeFields = settings.getArray(UserSettings.CONTACTS_ATTRS, ",", includeFieldsDefault);
 
+        String debug_prefix = "";
+        if (asGroupMember) {
+            debug_prefix = "Group member - ";
+        }
+
         if (object instanceof String) {
 
             // Inline group member
+            logger.debug(debug_prefix + "Making contact object with String instance: " + object);
             contactObj.put("email", object);
 
         } else if (object instanceof Contact) {
@@ -101,8 +111,9 @@ public class ContactsFetcher {
             Contact contact = (Contact) object;
             Map<String, String> contactFields = contact.getFields();
 
-            // Contacts without an email address are useless to us
             if (contactFields.containsKey("email")) {
+                logger.debug(debug_prefix + "Making contact object with Contact instance: " + contactFields.get("email"));
+
                 contactObj.put("email", contactFields.get("email"));
 
                 HashMap<String, String> properties = new HashMap<String, String>();
@@ -121,6 +132,10 @@ public class ContactsFetcher {
                     contactObj.put("tags", contact.getTags());
                 }
 
+            } else {
+                // Contacts without an email address are useless to us
+                logger.debug(debug_prefix + "Contact instance has no email, ignoring");
+                return null;
             }
 
         } else if (object instanceof GalContact) {
@@ -167,6 +182,11 @@ public class ContactsFetcher {
                     }
                 }
             }
+            // Test if an email was found
+            if (contactObj.get("email") == null) {
+                logger.debug(debug_prefix + "Element instance has no email, ignoring");
+                return null;
+            }
 
         }
 
@@ -202,15 +222,19 @@ public class ContactsFetcher {
             ContactGroup contactGroup = ContactGroup.init(encodedGroupMembers);
 
             contactGroup.derefAllMembers(mbx, octxt);
-            List<Member> members = contactGroup.getMembers(true);
+            List<Member> members = contactGroup.getDerefedMembers();
+
+            logger.debug("Contact group: " + group.getFileAsString());
 
             for (Member member : members) {
                 Object memberObj = member.getDerefedObj();
                 // build contact entry
-                if (member != null) {
+                if (memberObj != null) {
                     String ref = "group:" + group.getAccount().getId() + ':' + group.getId();
-                    HashMap<String, Object> contactObj = makeContactObj(member, ref, true);
-                    groupMembers.add(contactObj);
+                    HashMap<String, Object> contactObj = makeContactObj(memberObj, ref, true);
+                    if (contactObj != null) {
+                        groupMembers.add(contactObj);
+                    }
                 }
             }
 
@@ -269,12 +293,14 @@ public class ContactsFetcher {
             } else {
 
                 HashMap<String, Object> contactObj = makeContactObj(contact);
-                contactsCollection.add(contactObj);
-                int index = contactsCollection.indexOf(contactObj);
+                if (contactObj != null) {
+                    contactsCollection.add(contactObj);
+                    int index = contactsCollection.indexOf(contactObj);
 
-                @SuppressWarnings("unchecked")
-                List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
-                contacts_index.add(index);
+                    @SuppressWarnings("unchecked")
+                    List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
+                    contacts_index.add(index);
+                }
 
             }
         }
@@ -296,9 +322,9 @@ public class ContactsFetcher {
     private void handleFolderNode(FolderNode node, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
         if (isAddressBook(node.mFolder) || node.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
             if (node.mFolder.getId() != Mailbox.ID_FOLDER_USER_ROOT) {
-                logger.info(node.mName);
                 if (node.mFolder.getType() == MailItem.Type.MOUNTPOINT) {
                     // this is a mountpoint
+                    logger.debug("Shared address book: " + node.mName);
                     if(settings.getBool(UserSettings.INCLUDE_SHARED)) {
                         Mountpoint mp = mbx.getMountpointById(octxt, node.mFolder.getId());
                         // Get all the elements necessary
@@ -317,7 +343,7 @@ public class ContactsFetcher {
                         } catch (ServiceException e) {
                             if (e.getCode().equals(ServiceException.PERM_DENIED)) {
                                 // if it is a permission denied, fail gracefully
-                                logger.info("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
+                                logger.debug("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
                             } else {
                                 // re-raise
                                 throw e;
@@ -325,6 +351,7 @@ public class ContactsFetcher {
                         }
                     }
                 } else {
+                    logger.debug("Address book: " + node.mName);
                     HashMap<String, Object> subtree = handleFolderContent(node.mFolder, mbx, treeNode);
 
                     // Keep crawling local subtree
@@ -390,15 +417,11 @@ public class ContactsFetcher {
 
         crawlContacts();
 
-        logger.info("Tree: "+addressBookTree);
-
         for (Map.Entry<String, Object> entry : addressBookTree.entrySet()) {
             @SuppressWarnings("unchecked")
             HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
             recurseTree(value);
         }
-
-        logger.info("Tree: "+addressBookTree);
 
         return addressBookTree;
     }

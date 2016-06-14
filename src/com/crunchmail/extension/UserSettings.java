@@ -3,10 +3,11 @@ package com.crunchmail.extension;
 import java.util.Map;
 import java.util.HashMap;
 
-import com.zimbra.common.util.ZimbraLog;
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.common.soap.Element;
 import com.zimbra.cs.account.Account;
+
+import com.crunchmail.extension.Logger;
 
 public class UserSettings {
 
@@ -18,6 +19,8 @@ public class UserSettings {
 
     private Map<String, String> settings;
 
+    private Logger logger = new Logger();
+
     public UserSettings(Account account) throws ServiceException {
         settings = new HashMap<String, String>();
 
@@ -27,21 +30,26 @@ public class UserSettings {
             // 2: property name
             // 3: property value
             String[] elements = property.split(":", 3);
-            if (elements[0].equals("com_crunchmail_zimlet") && elements.length == 3) {
-                settings.put(elements[1], elements[2]);
-            }
 
             /**
              * 			TEMP
              *  remove old settings
              */
             if (elements[0].equals("crunchmail_zimlet") || elements[0].equals("munchmail_zimlet")) {
+                logger.info("Removing old user property: " + property);
                 account.removeZimletUserProperties(property);
+                continue;
             }
             if (elements[0].equals("com_crunchmail_zimlet") && (elements[1].startsWith("crunchmail_") || elements[1].equals("contacts_dlist_owner_of"))) {
+                logger.info("Removing old user property: " + property);
                 account.removeZimletUserProperties(property);
+                continue;
             }
             /*******/
+
+            if (elements[0].equals("com_crunchmail_zimlet") && elements.length == 3) {
+                settings.put(elements[1], elements[2]);
+            }
         }
     }
 

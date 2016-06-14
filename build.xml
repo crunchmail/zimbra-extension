@@ -226,7 +226,7 @@ Needs jsch-libraries for the deployment tasks.
         <build />
     </target>
 
-    <target name="deploy" description="Transfers the jar to the server">
+    <target name="deploy" depends="init" description="Transfers the jar to the server">
 
         <sequential>
             <build />

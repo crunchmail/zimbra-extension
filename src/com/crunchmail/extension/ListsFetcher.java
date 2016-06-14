@@ -22,14 +22,19 @@ import com.crunchmail.extension.UserSettings;
  */
 public class ListsFetcher {
 
-    private Logger logger = new Logger();
+    private Logger logger;
 
     private UserSettings settings;
     private Account account;
 
     public ListsFetcher(Account account) throws ServiceException {
+        this(account, false);
+    }
+
+    public ListsFetcher(Account account, boolean debug) throws ServiceException {
         this.account = account;
         settings = new UserSettings(account);
+        logger = new Logger(debug);
     }
 
     /**
@@ -69,7 +74,7 @@ public class ListsFetcher {
                     continue;
                 } else {
                     // something else or already handled, ignore
-                    logger.info("Ignoring member in list "+group.getMail()+". Either a nested group already handled or an unknown type: "+member);
+                    logger.debug("Ignoring member in list "+group.getMail()+". Either a nested group already handled or an unknown type: "+member);
                     continue;
                 }
             }
@@ -120,7 +125,10 @@ public class ListsFetcher {
     private HashMap<String, Object> handleGroup(Group group) throws ServiceException {
         HashMap<String, Object> list = new HashMap<String, Object>();
 
+        logger.debug("List: " + group.getMail());
+
         list.put("name", group.getDisplayName());
+        list.put("email", group.getMail());
         list.put("members", new HashSet<HashMap<String, Object>>());
 
         // Use a reference to add object in handleGroupMembers
@@ -150,13 +158,13 @@ public class ListsFetcher {
         List<HashMap<String, Object>> collection = new ArrayList<HashMap<String, Object>>();
 
         // Always get the lists the account is owner of
-        logger.info("Crawling distribution lists (ownerOf)");
+        logger.debug("Crawling distribution lists (ownerOf)");
         Set<Group> ownerOf = Group.GroupOwner.getOwnedGroups(account);
 
         // Get the lists the account is member of if configured
         // and deduplicate lists
         if (settings.getBool(UserSettings.DLIST_MEMBER_OF)) {
-            logger.info("Crawling distribution lists (memberOf)");
+            logger.debug("Crawling distribution lists (memberOf)");
 
             Provisioning prov = Provisioning.getInstance();
             HashMap<String, String> via = new HashMap<String, String>();

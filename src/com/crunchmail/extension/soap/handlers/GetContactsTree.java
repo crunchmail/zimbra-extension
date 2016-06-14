@@ -22,10 +22,28 @@ import com.crunchmail.extension.ListsFetcher;
 import com.crunchmail.extension.soap.ResponseHelpers;
 
 
+/**
+ * Get the contacts and distributions lists Tree for the account,
+ * use within the zimlet's iFrame
+ *
+ * <GetContactsTreeRequest xmlns="urn:crunchmail" [debug="0|1"] />
+ *
+ * <GetContactsTreeResponse>
+ *   TREE
+ *   (<dls name="group-name">
+ *       (<members email="contact-email" sourceType="zimbra"
+ *                 sourceRef="dl:list-email">
+ *           <properties [firstName=""] [lastName=""] />
+ *       </members>)*
+ *   </dls>)*
+ *   (<tags name="tag-name" color="HEX color" />)*
+ * </GetContactsTreeResponse>
+ *
+ */
 public class GetContactsTree extends DocumentHandler {
 
     // private boolean asTree;
-    private Logger logger = new Logger();
+    private Logger logger;
     private ResponseHelpers helpers = new ResponseHelpers();
 
     private void recurseTree(Element el, String name, HashMap<String, Object> entry) throws ServiceException {
@@ -77,8 +95,8 @@ public class GetContactsTree extends DocumentHandler {
         }
     }
 
-    private void handleTree(Mailbox mbox, Account account, Element response) throws ServiceException {
-        ContactsFetcher fetcher = new ContactsFetcher(mbox, account);
+    private void handleTree(Mailbox mbox, Account account, Element response, boolean debug) throws ServiceException {
+        ContactsFetcher fetcher = new ContactsFetcher(mbox, account, debug);
         Map<String, Object> tree = fetcher.fetchTree();
 
         Element t = response.addUniqueElement("tree");
@@ -90,8 +108,8 @@ public class GetContactsTree extends DocumentHandler {
         }
     }
 
-    private void handleLists(Account account, Element response) throws ServiceException {
-        ListsFetcher fetcher = new ListsFetcher(account);
+    private void handleLists(Account account, Element response, boolean debug) throws ServiceException {
+        ListsFetcher fetcher = new ListsFetcher(account, debug);
         List<HashMap<String, Object>> collection = fetcher.fetch();
 
         for (HashMap<String, Object> list : collection) {
@@ -119,6 +137,9 @@ public class GetContactsTree extends DocumentHandler {
     @Override
     public Element handle(Element request, Map<String, Object> context) throws ServiceException {
 
+        boolean debug = request.getAttributeBool("debug", false);
+        logger = new Logger(debug);
+
         // We time fetch exec time to return it to the client
         Stopwatch timer = new Stopwatch().start();
 
@@ -128,8 +149,8 @@ public class GetContactsTree extends DocumentHandler {
 
         Element response = zsc.createElement("GetContactsResponse");
 
-        handleTree(mbox, account, response);
-        handleLists(account, response);
+        handleTree(mbox, account, response, debug);
+        handleLists(account, response, debug);
 
         OperationContext octxt = new OperationContext(mbox);
         List<Tag> tags = mbox.getTagList(octxt);
@@ -145,8 +166,6 @@ public class GetContactsTree extends DocumentHandler {
 
         response.addAttribute("timer", timer.toString());
         logger.info("Fetched contacts in: "+timer);
-
-        logger.debug(response.prettyPrint());
 
         return response;
     }
