@@ -147,7 +147,7 @@ public class GetContactsTree extends DocumentHandler {
         Mailbox mbox = getRequestedMailbox(zsc);
         Account account = mbox.getAccount();
 
-        Element response = zsc.createElement("GetContactsResponse");
+        Element response = zsc.createElement("GetContactsTreeResponse");
 
         handleTree(mbox, account, response, debug);
         handleLists(account, response, debug);
