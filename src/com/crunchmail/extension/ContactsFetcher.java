@@ -431,8 +431,6 @@ public class ContactsFetcher {
                             if (node.mFolder.getDefaultView() == MailItem.Type.UNKNOWN) {
                                 remote.put("share_root", true);
                                 remote.put("color", node.mFolder.getRgbColor().toString());
-                            } else {
-                                remote.put("share_root", false);
                             }
 
                             remoteCollection.add(remote);
@@ -527,29 +525,24 @@ public class ContactsFetcher {
         String token = getAuthToken();
         if (token != null) {
             for (HashMap<String, Object> remote : remoteCollection) {
-                // Ignore if this is a full-account share root, we don't care about its content
-                if (!((boolean) remote.get("share_root"))) {
-                    remote.remove("share_root");
+                String server = (String) remote.get("server");
+                remote.remove("server");
 
-                    String server = (String) remote.get("server");
-                    remote.remove("server");
+                remote.put("tree", false);
 
-                    remote.put("tree", false);
+                Gson gson = new Gson();
+                try {
 
-                    Gson gson = new Gson();
-                    try {
+                    String resp = getRemoteFolder(server, token, gson.toJson(remote));
+                    Type type = new TypeToken<Map<String, List<HashMap<String, Object>>>>(){}.getType();
+                    Map<String, List<HashMap<String, Object>>> remoteFolderCollection = gson.fromJson(resp, type);
+                    // Merge in our collections
+                    contactsCollection.addAll(remoteFolderCollection.get("contacts"));
+                    groupsCollection.addAll(remoteFolderCollection.get("groups"));
 
-                        String resp = getRemoteFolder(server, token, gson.toJson(remote));
-                        Type type = new TypeToken<Map<String, List<HashMap<String, Object>>>>(){}.getType();
-                        Map<String, List<HashMap<String, Object>>> remoteFolderCollection = gson.fromJson(resp, type);
-                        // Merge in our collections
-                        contactsCollection.addAll(remoteFolderCollection.get("contacts"));
-                        groupsCollection.addAll(remoteFolderCollection.get("groups"));
-
-                    } catch (RuntimeException e) {
-                        // HTTP request failed. Log error, set an empty object and move on
-                        logger.warn("Could not get remote folder collection. Error: "+ e.getMessage());
-                    }
+                } catch (RuntimeException e) {
+                    // HTTP request failed. Log error, set an empty object and move on
+                    logger.warn("Could not get remote folder collection. Error: "+ e.getMessage());
                 }
             }
         }
