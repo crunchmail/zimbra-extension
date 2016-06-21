@@ -111,11 +111,9 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
         } else {
 
             try {
-                logger.debug("account");
+                logger.debug("Remove server asking for folder content (account: "+req.get("account")+", item: "+req.get("item")+", remote account: "+octxt.getAuthenticatedUser().getId()+")");
                 Account account = Provisioning.getInstance().getAccount(req.get("account"));
-                logger.debug("mbox");
                 Mailbox mbox = MailboxManager.getInstance().getMailboxByAccountId(req.get("account"));
-                logger.debug("item");
                 ItemId iid = new ItemId(req.get("account"), Integer.parseInt(req.get("item")));
 
                 if (isAuthorized(mbox, iid)) {

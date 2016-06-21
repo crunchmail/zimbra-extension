@@ -51,7 +51,7 @@ public class GetContactsTree extends DocumentHandler {
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> contacts = (List<Map<String, Object>>) entry.get("contacts");
-        if (contacts.isEmpty()) {
+        if (contacts == null || contacts.isEmpty()) {
             // add it anyway so client doesn't have to test
             f.addNonUniqueElement("contacts");
         } else {
@@ -63,7 +63,7 @@ public class GetContactsTree extends DocumentHandler {
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> groups = (List<Map<String, Object>>) entry.get("groups");
-        if (groups.isEmpty()) {
+        if (groups == null || groups.isEmpty()) {
             // add it anyway so client doesn't have to test
             f.addNonUniqueElement("groups");
         } else {

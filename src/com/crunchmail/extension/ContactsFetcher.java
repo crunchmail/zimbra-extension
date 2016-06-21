@@ -60,7 +60,7 @@ public class ContactsFetcher {
 
     private List<HashMap<String, Object>> contactsCollection;
     private List<HashMap<String, Object>> groupsCollection;
-    private List<HashMap<String, String>> remoteCollection;
+    private List<HashMap<String, Object>> remoteCollection;
     HashMap<String, Object> addressBookTree;
 
     public ContactsFetcher(Mailbox mbox, Account account) throws ServiceException {
@@ -85,7 +85,7 @@ public class ContactsFetcher {
 
         contactsCollection = new ArrayList<HashMap<String, Object>>();
         groupsCollection = new ArrayList<HashMap<String, Object>>();
-        remoteCollection = new ArrayList<HashMap<String, String>>();
+        remoteCollection = new ArrayList<HashMap<String, Object>>();
         addressBookTree = new HashMap<String, Object>();
     }
 
@@ -290,16 +290,15 @@ public class ContactsFetcher {
 
     private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
         // This is the mose commonly used version.
-        // Parameter nodeName is only passed when folder is a mountpoint
-        // to get the actual displayed name
-        return handleFolderContent(f, mbx, treeNode, f.getName());
+        // Parameters nodeName and skipContent are only passed when folder is a mountpoint
+        return handleFolderContent(f, mbx, treeNode, f.getName(), false);
     }
 
-    private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode, String nodeName) throws ServiceException {
+    private HashMap<String, Object> handleFolderContent(Folder f, Mailbox mbx, HashMap<String, Object> treeNode, String nodeName, boolean skipContent) throws ServiceException {
 
         // Make tree entry if necessary
         @SuppressWarnings("unchecked")
-        HashMap<String, Object> treeEntry = (HashMap<String, Object>) treeNode.get(f.getName());
+        HashMap<String, Object> treeEntry = (HashMap<String, Object>) treeNode.get(nodeName);
         if (treeEntry == null) {
             treeEntry = new HashMap<String, Object>();
 
@@ -312,36 +311,38 @@ public class ContactsFetcher {
             treeEntry.put("contacts_index", new ArrayList<Integer>());
             treeEntry.put("groups_index", new ArrayList<Integer>());
 
-            treeNode.put(f.getName(), treeEntry);
+            treeNode.put(nodeName, treeEntry);
         }
 
-        // This will return contacts and contact groups
-        List<Contact> contacts = mbx.getContactList(octxt, f.getId(), SortBy.NAME_ASC);
+        if (!skipContent) {
+            // This will return contacts and contact groups
+            List<Contact> contacts = mbx.getContactList(octxt, f.getId(), SortBy.NAME_ASC);
 
-        for (Contact contact : contacts) {
-            if (contact.isContactGroup()) {
+            for (Contact contact : contacts) {
+                if (contact.isContactGroup()) {
 
-                HashMap<String, Object> groupObj = makeGroupObj(contact, mbx);
-                if (groupObj != null) {
-                    groupsCollection.add(groupObj);
-                    int index = groupsCollection.indexOf(groupObj);
+                    HashMap<String, Object> groupObj = makeGroupObj(contact, mbx);
+                    if (groupObj != null) {
+                        groupsCollection.add(groupObj);
+                        int index = groupsCollection.indexOf(groupObj);
 
-                    @SuppressWarnings("unchecked")
-                    List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
-                    groups_index.add(index);
+                        @SuppressWarnings("unchecked")
+                        List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
+                        groups_index.add(index);
+                    }
+                } else {
+
+                    HashMap<String, Object> contactObj = makeContactObj(contact);
+                    if (contactObj != null) {
+                        contactsCollection.add(contactObj);
+                        int index = contactsCollection.indexOf(contactObj);
+
+                        @SuppressWarnings("unchecked")
+                        List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
+                        contacts_index.add(index);
+                    }
+
                 }
-            } else {
-
-                HashMap<String, Object> contactObj = makeContactObj(contact);
-                if (contactObj != null) {
-                    contactsCollection.add(contactObj);
-                    int index = contactsCollection.indexOf(contactObj);
-
-                    @SuppressWarnings("unchecked")
-                    List<Integer> contacts_index = (List<Integer>) treeEntry.get("contacts_index");
-                    contacts_index.add(index);
-                }
-
             }
         }
 
@@ -351,19 +352,29 @@ public class ContactsFetcher {
         return subfolders;
     }
 
-    private boolean isAddressBook(Folder folder) {
+    private boolean shouldConsider(Folder folder) {
         if (folder.getId() == Mailbox.ID_FOLDER_AUTO_CONTACTS) {
             // We ignore "Emailed Contacts"
             return false;
         }
-        return (folder.getDefaultView() == MailItem.Type.CONTACT);
+        // We consider to types:
+        //
+        //   - Actual contacts folders (local or mountpoints)
+        //   - Folders with Unknown type that are mountpoints (Root of entire accounts shares)
+        return (folder.getDefaultView() == MailItem.Type.CONTACT || (folder.getDefaultView() == MailItem.Type.UNKNOWN && folder.getType() == MailItem.Type.MOUNTPOINT));
     }
 
     private void handleFolderNode(FolderNode node, Mailbox mbx, HashMap<String, Object> treeNode) throws ServiceException {
-        if (isAddressBook(node.mFolder) || node.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
+        if (shouldConsider(node.mFolder) || node.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
             if (node.mFolder.getId() != Mailbox.ID_FOLDER_USER_ROOT) {
-                if (node.mFolder.getType() == MailItem.Type.MOUNTPOINT) {
-                    // this is a mountpoint
+                logger.debug("Considering folder: "+node.mName+". Type: "+node.mFolder.getType());
+                // Only consider mountpoints if we're in our own account.
+                // This means:
+                //
+                //   - current mbx object is the same as the mbox object passed to constructor
+                //   - AND forceConsiderShared is false, meaning we're not being called by another server
+                if (node.mFolder.getType() == MailItem.Type.MOUNTPOINT && (mbx == mbox && !forceConsiderShared)) {
+                    // Crawl mountpoint
                     logger.debug("Shared address book: " + node.mName);
                     if(settings.getBool(UserSettings.INCLUDE_SHARED)) {
                         Mountpoint mp = mbx.getMountpointById(octxt, node.mFolder.getId());
@@ -383,7 +394,17 @@ public class ContactsFetcher {
                             try {
                                 // will throw an exception if current user does not have sufficient permissions on owner's object
                                 FolderNode sharedFolder = rmbox.getFolderTree(octxt, iid, true);
-                                HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName());
+
+                                // Two options here :
+                                //
+                                //   - Mountpoint is a classic share: treat it normally
+                                //   - Mountpoint is the Root of a full-account share: register the node with the local name but ignore its content
+                                boolean skipContent = false;
+                                if (sharedFolder.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
+                                    skipContent = true;
+                                }
+                                // HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName(), skipContent);
+                                HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, node.mName, skipContent);
 
                                 for (FolderNode subnode : sharedFolder.mSubfolders) {
                                     handleFolderNode(subnode, rmbox, subtree);
@@ -400,17 +421,25 @@ public class ContactsFetcher {
                         } else {
                             logger.debug("Marking mountpoint for future fetch, target account is on a different server");
 
-                            HashMap<String, String> remote = new HashMap<String, String>();
+                            HashMap<String, Object> remote = new HashMap<String, Object>();
                             remote.put("account", oid);
-                            remote.put("item", Integer.toString(iid.getId()));
+                            // remote.put("item", Integer.toString(iid.getId()));
+                            remote.put("item", iid.getId());
                             remote.put("include_fields", settings.get(UserSettings.CONTACTS_ATTRS, Joiner.on(",").join(includeFieldsDefault)));
                             remote.put("server", ownerServer);
+                            // If this is a full-account share mountpoint, mark it as such and add its attributes
+                            if (node.mFolder.getDefaultView() == MailItem.Type.UNKNOWN) {
+                                remote.put("share_root", true);
+                                remote.put("color", node.mFolder.getRgbColor().toString());
+                            } else {
+                                remote.put("share_root", false);
+                            }
 
                             remoteCollection.add(remote);
                             treeNode.put(node.mName, remote);
                         }
                     }
-                } else {
+                } else if (node.mFolder.getType() != MailItem.Type.MOUNTPOINT) {
                     logger.debug("Address book: " + node.mName);
                     HashMap<String, Object> subtree = handleFolderContent(node.mFolder, mbx, treeNode);
 
@@ -497,24 +526,30 @@ public class ContactsFetcher {
 
         String token = getAuthToken();
         if (token != null) {
-            for (HashMap<String, String> remote : remoteCollection) {
-                String server = (String) remote.get("server");
-                remote.remove("server");
-                remote.put("tree", "false");
+            for (HashMap<String, Object> remote : remoteCollection) {
+                // Ignore if this is a full-account share root, we don't care about its content
+                if (!((boolean) remote.get("share_root"))) {
+                    remote.remove("share_root");
 
-                Gson gson = new Gson();
-                try {
+                    String server = (String) remote.get("server");
+                    remote.remove("server");
 
-                    String resp = getRemoteFolder(server, token, gson.toJson(remote));
-                    Type type = new TypeToken<Map<String, List<HashMap<String, Object>>>>(){}.getType();
-                    Map<String, List<HashMap<String, Object>>> remoteFolderCollection = gson.fromJson(resp, type);
-                    // Merge in our collections
-                    contactsCollection.addAll(remoteFolderCollection.get("contacts"));
-                    groupsCollection.addAll(remoteFolderCollection.get("groups"));
+                    remote.put("tree", false);
 
-                } catch (RuntimeException e) {
-                    // HTTP request failed. Log error, set an empty object and move on
-                    logger.warn("Could not get remote folder collection. Error: "+ e.getMessage());
+                    Gson gson = new Gson();
+                    try {
+
+                        String resp = getRemoteFolder(server, token, gson.toJson(remote));
+                        Type type = new TypeToken<Map<String, List<HashMap<String, Object>>>>(){}.getType();
+                        Map<String, List<HashMap<String, Object>>> remoteFolderCollection = gson.fromJson(resp, type);
+                        // Merge in our collections
+                        contactsCollection.addAll(remoteFolderCollection.get("contacts"));
+                        groupsCollection.addAll(remoteFolderCollection.get("groups"));
+
+                    } catch (RuntimeException e) {
+                        // HTTP request failed. Log error, set an empty object and move on
+                        logger.warn("Could not get remote folder collection. Error: "+ e.getMessage());
+                    }
                 }
             }
         }
@@ -527,14 +562,17 @@ public class ContactsFetcher {
         @SuppressWarnings("unchecked")
         HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
         if (value.get("server") != null) {
-            logger.debug("Value: " + value);
             // HTTP request + replace entry value
             String token = getAuthToken();
             if (token != null) {
+
+                boolean shareRoot = (boolean) value.get("share_root");
+                value.remove("share_root");
+
                 String server = (String) value.get("server");
                 value.remove("server");
 
-                value.put("tree", "true");
+                value.put("tree", true);
 
                 Gson gson = new Gson();
                 try {
@@ -542,9 +580,21 @@ public class ContactsFetcher {
                     String resp = getRemoteFolder(server, token, gson.toJson(value));
                     Type type = new TypeToken<HashMap<String, Object>>(){}.getType();
                     HashMap<String, Object> remoteTree = gson.fromJson(resp, type);
-                    // Replace entry value with result value
-                    // This way we keep the mountpoint name instead of the remote folder name
-                    entry.setValue(remoteTree.get(remoteTree.keySet().toArray()[0]));
+                    if (shareRoot) {
+                        // add _attrs and _subfolders
+                        // insert remoteTree in _subfolders
+                        HashMap<String, Object> remoteRoot = new HashMap<String, Object>();
+                        HashMap<String, Object> attrs = new HashMap<String, Object>();
+                        attrs.put("isShare",  true);
+                        attrs.put("color", value.get("color"));
+                        remoteRoot.put("_attrs", attrs);
+                        remoteRoot.put("_subfolders", remoteTree);
+                        entry.setValue(remoteRoot);
+                    } else {
+                        // Replace entry value with result value
+                        // This way we keep the mountpoint name instead of the remote folder name
+                        entry.setValue(remoteTree.get(remoteTree.keySet().toArray()[0]));
+                    }
 
                 } catch (RuntimeException e) {
 
@@ -564,8 +614,10 @@ public class ContactsFetcher {
             @SuppressWarnings("unchecked")
             List<Integer> contacts_index = (List<Integer>) value.get("contacts_index");
             List<HashMap<String, Object>> treeNodeContacts = new ArrayList<HashMap<String, Object>>();
-            for (int index : contacts_index) {
-                treeNodeContacts.add(contactsCollection.get(index));
+            if (!contacts_index.isEmpty()) {
+                for (int index : contacts_index) {
+                    treeNodeContacts.add(contactsCollection.get(index));
+                }
             }
             value.put("contacts", treeNodeContacts);
             value.remove("contacts_index");
@@ -573,8 +625,10 @@ public class ContactsFetcher {
             @SuppressWarnings("unchecked")
             List<Integer> groups_index = (List<Integer>) value.get("groups_index");
             List<HashMap<String, Object>> treeNodeGroups = new ArrayList<HashMap<String, Object>>();
-            for (int index : groups_index) {
-                treeNodeGroups.add(groupsCollection.get(index));
+            if (!groups_index.isEmpty()) {
+                for (int index : groups_index) {
+                    treeNodeGroups.add(groupsCollection.get(index));
+                }
             }
             value.put("groups", treeNodeGroups);
             value.remove("groups_index");
