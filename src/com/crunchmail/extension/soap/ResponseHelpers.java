@@ -43,8 +43,15 @@ public class ResponseHelpers {
     }
 
     public void makeGroupElement(Element e, Map<String, Object> group) {
-        e.addAttribute("name", (String) group.get("name"));
+        // Start by inserting all plain string attributes
+        for (Map.Entry<String, Object> attr : group.entrySet()) {
+            Object value = attr.getValue();
+            if (value instanceof String) {
+                e.addAttribute(attr.getKey(), (String) value);
+            }
+        }
 
+        // Then deal with "complex" ones
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> members = (List<Map<String, Object>>) group.get("members");
         for (Map<String, Object> contact : members) {

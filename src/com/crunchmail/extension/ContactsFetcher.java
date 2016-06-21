@@ -156,6 +156,9 @@ public class ContactsFetcher {
                 if (!asGroupMember) {
                     contactObj.put("name", contact.getFileAsString());
                     contactObj.put("tags", new ArrayList<String>(Arrays.asList(contact.getTags())));
+                    // Add an ID attribute for use by frontend
+                    String id = contact.getAccount().getId() + ":" + contact.getId();
+                    contactObj.put("id", id);
                 }
 
             } else {
@@ -250,13 +253,23 @@ public class ContactsFetcher {
             contactGroup.derefAllMembers(mbx, octxt);
             List<Member> members = contactGroup.getDerefedMembers();
 
+            // A group without members is useless
+            if (members.isEmpty()) {
+                logger.debug("Ignoring group "+ group.getFileAsString() +". It has no members.");
+                return null;
+            }
+
             logger.debug("Contact group: " + group.getFileAsString());
+
+            // Add an ID attribute for use by frontend
+            String id = group.getAccount().getId() + ':' + group.getId();
+            groupObj.put("id", id);
 
             for (Member member : members) {
                 Object memberObj = member.getDerefedObj();
                 // build contact entry
                 if (memberObj != null) {
-                    String ref = "group:" + group.getAccount().getId() + ':' + group.getId();
+                    String ref = "group:" + id;
                     HashMap<String, Object> contactObj = makeContactObj(memberObj, ref, true);
                     if (contactObj != null) {
                         groupMembers.add(contactObj);
@@ -309,13 +322,14 @@ public class ContactsFetcher {
             if (contact.isContactGroup()) {
 
                 HashMap<String, Object> groupObj = makeGroupObj(contact, mbx);
-                groupsCollection.add(groupObj);
-                int index = groupsCollection.indexOf(groupObj);
+                if (groupObj != null) {
+                    groupsCollection.add(groupObj);
+                    int index = groupsCollection.indexOf(groupObj);
 
-                @SuppressWarnings("unchecked")
-                List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
-                groups_index.add(index);
-
+                    @SuppressWarnings("unchecked")
+                    List<Integer> groups_index = (List<Integer>) treeEntry.get("groups_index");
+                    groups_index.add(index);
+                }
             } else {
 
                 HashMap<String, Object> contactObj = makeContactObj(contact);

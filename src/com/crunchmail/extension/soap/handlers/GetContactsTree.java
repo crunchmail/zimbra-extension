@@ -115,6 +115,7 @@ public class GetContactsTree extends DocumentHandler {
         for (HashMap<String, Object> list : collection) {
             Element l = response.addNonUniqueElement("dls");
 
+            l.addAttribute("id", (String) list.get("id"));
             l.addAttribute("name", (String) list.get("name"));
             l.addAttribute("email", (String) list.get("email"));
 

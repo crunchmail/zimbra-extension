@@ -127,6 +127,7 @@ public class ListsFetcher {
 
         logger.debug("List: " + group.getMail());
 
+        list.put("id", group.getId());
         list.put("name", group.getDisplayName());
         list.put("email", group.getMail());
         list.put("members", new HashSet<HashMap<String, Object>>());
