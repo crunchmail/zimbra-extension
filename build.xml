@@ -156,7 +156,7 @@ Needs jsch-libraries for the deployment tasks.
                     <pathelement path="${build}" />
                 </classpath>
                 <!-- <compilerarg value="-Xlint:all" /> -->
-                <compilerarg value="-Xlint:none" />
+                <compilerarg value="-Xlint:unchecked" />
             </javac>
 
             <gen-slug />

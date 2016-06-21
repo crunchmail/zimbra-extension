@@ -33,7 +33,8 @@ public class ResponseHelpers {
         }
 
         if (contact.containsKey("tags")) {
-            String[] tags = (String[]) contact.get("tags");
+            @SuppressWarnings("unchecked")
+            List<String> tags = (List<String>) contact.get("tags");
             for (String tag : tags) {
                 Element t = e.addNonUniqueElement("tags");
                 t.addAttribute("name", tag);
@@ -41,18 +42,19 @@ public class ResponseHelpers {
         }
     }
 
-    public void makeGroupElement(Element e, HashMap<String, Object> group) {
+    public void makeGroupElement(Element e, Map<String, Object> group) {
         e.addAttribute("name", (String) group.get("name"));
 
         @SuppressWarnings("unchecked")
-        List<HashMap<String, Object>> members = (List<HashMap<String, Object>>) group.get("members");
-        for (HashMap<String, Object> contact : members) {
+        List<Map<String, Object>> members = (List<Map<String, Object>>) group.get("members");
+        for (Map<String, Object> contact : members) {
             Element m = e.addNonUniqueElement("members");
             makeContactElement(m, contact);
         }
 
         if (group.containsKey("tags")) {
-            String[] tags = (String[]) group.get("tags");
+            @SuppressWarnings("unchecked")
+            List<String> tags = (List<String>) group.get("tags");
             for (String tag : tags) {
                 Element t = e.addNonUniqueElement("tags");
                 t.addAttribute("name", tag);

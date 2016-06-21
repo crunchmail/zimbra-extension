@@ -6,7 +6,4 @@ tmpsrc/
 *.class
 .zimbra_version
 
-lib/**
-!lib/.keepme
-
 src/com/crunchmail/extension/BuildInfo.java

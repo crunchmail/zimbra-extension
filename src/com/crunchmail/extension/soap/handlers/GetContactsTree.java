@@ -46,28 +46,28 @@ public class GetContactsTree extends DocumentHandler {
     private Logger logger;
     private ResponseHelpers helpers = new ResponseHelpers();
 
-    private void recurseTree(Element el, String name, HashMap<String, Object> entry) throws ServiceException {
+    private void recurseTree(Element el, String name, Map<String, Object> entry) throws ServiceException {
         Element f = el.addUniqueElement(name);
 
         @SuppressWarnings("unchecked")
-        Set<HashMap<String, Object>> contacts = (Set<HashMap<String, Object>>) entry.get("contacts");
+        List<Map<String, Object>> contacts = (List<Map<String, Object>>) entry.get("contacts");
         if (contacts.isEmpty()) {
             // add it anyway so client doesn't have to test
             f.addNonUniqueElement("contacts");
         } else {
-            for (HashMap<String, Object> contact : contacts) {
+            for (Map<String, Object> contact : contacts) {
                 Element c = f.addNonUniqueElement("contacts");
                 helpers.makeContactElement(c, contact);
             }
         }
 
         @SuppressWarnings("unchecked")
-        Set<HashMap<String, Object>> groups = (Set<HashMap<String, Object>>) entry.get("groups");
+        List<Map<String, Object>> groups = (List<Map<String, Object>>) entry.get("groups");
         if (groups.isEmpty()) {
             // add it anyway so client doesn't have to test
             f.addNonUniqueElement("groups");
         } else {
-            for (HashMap<String, Object> group : groups) {
+            for (Map<String, Object> group : groups) {
                 Element g = f.addNonUniqueElement("groups");
                 helpers.makeGroupElement(g, group);
             }
@@ -87,10 +87,10 @@ public class GetContactsTree extends DocumentHandler {
         Element s = f.addUniqueElement("_subfolders");
 
         @SuppressWarnings("unchecked")
-        HashMap<String, Object> subfolders = (HashMap<String, Object>) entry.get("_subfolders");
+        Map<String, Object> subfolders = (Map<String, Object>) entry.get("_subfolders");
         for (Map.Entry<String, Object> subfolder : subfolders.entrySet()) {
             @SuppressWarnings("unchecked")
-            HashMap<String, Object> value = (HashMap<String, Object>) subfolder.getValue();
+            Map<String, Object> value = (Map<String, Object>) subfolder.getValue();
             recurseTree(s, subfolder.getKey(), value);
         }
     }
@@ -103,7 +103,7 @@ public class GetContactsTree extends DocumentHandler {
 
         for (Map.Entry<String, Object> entry : tree.entrySet()) {
             @SuppressWarnings("unchecked")
-            HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
+            Map<String, Object> value = (Map<String, Object>) entry.getValue();
             recurseTree(t, entry.getKey(), value);
         }
     }

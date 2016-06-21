@@ -66,7 +66,7 @@ public class GetContacts extends DocumentHandler {
             // add it anyway so client doesn't have to test
             response.addNonUniqueElement("contacts");
         } else {
-            for (HashMap<String, Object> contact : contactsCollection) {
+            for (Map<String, Object> contact : contactsCollection) {
                 Element c = response.addNonUniqueElement("contacts");
                 helpers.makeContactElement(c, contact);
             }
@@ -77,7 +77,7 @@ public class GetContacts extends DocumentHandler {
             // add it anyway so client doesn't have to test
             response.addNonUniqueElement("groups");
         } else {
-            for (HashMap<String, Object> group : groupsCollection) {
+            for (Map<String, Object> group : groupsCollection) {
                 Element g = response.addNonUniqueElement("groups");
                 helpers.makeGroupElement(g, group);
             }

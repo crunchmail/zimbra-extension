@@ -1,21 +1,35 @@
 package com.crunchmail.extension;
 
-import java.util.Set;
-import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.lang.reflect.Type;
+import java.io.IOException;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.HttpResponse;
+import org.apache.http.util.EntityUtils;
 import com.google.common.base.Strings;
+import com.google.common.base.Joiner;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.common.mailbox.ContactConstants;
+import com.zimbra.common.account.ZAttrProvisioning;
 import com.zimbra.common.soap.Element;
 import com.zimbra.common.soap.MailConstants;
 import com.zimbra.cs.service.util.ItemId;
+import com.zimbra.cs.account.AuthToken;
+import com.zimbra.cs.account.AuthTokenException;
 import com.zimbra.cs.account.Account;
+import com.zimbra.cs.account.Provisioning;
 import com.zimbra.cs.account.GalContact;
+import com.zimbra.cs.account.Server;
 import com.zimbra.cs.mailbox.Mailbox;
 import com.zimbra.cs.mailbox.Mailbox.FolderNode;
 import com.zimbra.cs.mailbox.MailboxManager;
@@ -41,25 +55,38 @@ public class ContactsFetcher {
     private Mailbox mbox;
     private OperationContext octxt;
     private UserSettings settings;
-    // private boolean includeShared;
-    // private Crawler crawler;
+    private String[] includeFieldsDefault;
+    private boolean forceConsiderShared;
 
     private List<HashMap<String, Object>> contactsCollection;
     private List<HashMap<String, Object>> groupsCollection;
+    private List<HashMap<String, String>> remoteCollection;
     HashMap<String, Object> addressBookTree;
 
     public ContactsFetcher(Mailbox mbox, Account account) throws ServiceException {
-        this(mbox, account, false);
+        this(mbox, account, false, new String[] {ContactConstants.A_firstName, ContactConstants.A_lastName}, false);
     }
 
     public ContactsFetcher(Mailbox mbox, Account account, boolean debug) throws ServiceException {
+        this(mbox, account, debug, new String[] {ContactConstants.A_firstName, ContactConstants.A_lastName}, false);
+    }
+
+    public ContactsFetcher(Mailbox mbox, Account account, boolean debug, String[] includeFieldsDefault) throws ServiceException {
+        this(mbox, account, debug, new String[] {ContactConstants.A_firstName, ContactConstants.A_lastName}, false);
+    }
+
+    public ContactsFetcher(Mailbox mbox, Account account, boolean debug, String[] includeFieldsDefault, boolean forceConsiderShared) throws ServiceException {
+        logger = new Logger(debug);
         this.mbox = mbox;
         octxt = new OperationContext(mbox);
         settings = new UserSettings(account);
+        this.includeFieldsDefault = includeFieldsDefault;
+        this.forceConsiderShared = forceConsiderShared;
+
         contactsCollection = new ArrayList<HashMap<String, Object>>();
         groupsCollection = new ArrayList<HashMap<String, Object>>();
+        remoteCollection = new ArrayList<HashMap<String, String>>();
         addressBookTree = new HashMap<String, Object>();
-        logger = new Logger(debug);
     }
 
     private HashMap<String, Object> makeContactObj(Contact contact) throws ServiceException {
@@ -91,7 +118,6 @@ public class ContactsFetcher {
     private HashMap<String, Object> makeContactObj(Object object, String ref, boolean asGroupMember) throws ServiceException {
         HashMap<String, Object> contactObj = new HashMap<String, Object>();
 
-        String[] includeFieldsDefault = {ContactConstants.A_firstName, ContactConstants.A_lastName};
         String[] includeFields = settings.getArray(UserSettings.CONTACTS_ATTRS, ",", includeFieldsDefault);
 
         String debug_prefix = "";
@@ -129,7 +155,7 @@ public class ContactsFetcher {
                 // if building a normal contact, we need these attributes
                 if (!asGroupMember) {
                     contactObj.put("name", contact.getFileAsString());
-                    contactObj.put("tags", contact.getTags());
+                    contactObj.put("tags", new ArrayList<String>(Arrays.asList(contact.getTags())));
                 }
 
             } else {
@@ -240,7 +266,7 @@ public class ContactsFetcher {
 
             groupObj.put("members", groupMembers);
             groupObj.put("name", group.getFileAsString());
-            groupObj.put("tags", group.getTags());
+            groupObj.put("tags", new ArrayList<String>(Arrays.asList(group.getTags())));
 
         } catch (ServiceException e) {
             logger.warn("Unable to decode contact group", e);
@@ -265,7 +291,7 @@ public class ContactsFetcher {
             treeEntry = new HashMap<String, Object>();
 
             HashMap<String, Object> attrs = new HashMap<String, Object>();
-            attrs.put("isShare", mbx != mbox);
+            attrs.put("isShare",  forceConsiderShared || mbx != mbox);
             attrs.put("color", f.getRgbColor().toString());
             treeEntry.put("_attrs", attrs);
 
@@ -330,24 +356,44 @@ public class ContactsFetcher {
                         // Get all the elements necessary
                         String oid = mp.getOwnerId();
                         ItemId iid = mp.getTarget();
-                        Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(oid);
 
-                        try {
-                            // will throw an exception if current user does not have sufficient permissions on owner's object
-                            FolderNode sharedFolder = rmbox.getFolderTree(octxt, iid, true);
-                            HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName());
+                        // Check if account is on the same server, otherwise we can't do anything else here
+                        Account oacc = Provisioning.getInstance().getAccount(oid);
+                        String currentServer = mbx.getAccount().getMailHost();
+                        String ownerServer = oacc.getMailHost();
 
-                            for (FolderNode subnode : sharedFolder.mSubfolders) {
-                                handleFolderNode(subnode, rmbox, subtree);
+                        if (currentServer.equals(ownerServer)) {
+                            logger.debug("Target account is on same server, crawling mountpoint");
+                            Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(oid, false);
+
+                            try {
+                                // will throw an exception if current user does not have sufficient permissions on owner's object
+                                FolderNode sharedFolder = rmbox.getFolderTree(octxt, iid, true);
+                                HashMap<String, Object> subtree = handleFolderContent(sharedFolder.mFolder, rmbox, treeNode, mp.getName());
+
+                                for (FolderNode subnode : sharedFolder.mSubfolders) {
+                                    handleFolderNode(subnode, rmbox, subtree);
+                                }
+                            } catch (ServiceException e) {
+                                if (e.getCode().equals(ServiceException.PERM_DENIED)) {
+                                    // if it is a permission denied, fail gracefully
+                                    logger.debug("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
+                                } else {
+                                    // re-raise
+                                    throw e;
+                                }
                             }
-                        } catch (ServiceException e) {
-                            if (e.getCode().equals(ServiceException.PERM_DENIED)) {
-                                // if it is a permission denied, fail gracefully
-                                logger.debug("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
-                            } else {
-                                // re-raise
-                                throw e;
-                            }
+                        } else {
+                            logger.debug("Marking mountpoint for future fetch, target account is on a different server");
+
+                            HashMap<String, String> remote = new HashMap<String, String>();
+                            remote.put("account", oid);
+                            remote.put("item", Integer.toString(iid.getId()));
+                            remote.put("include_fields", settings.get(UserSettings.CONTACTS_ATTRS, Joiner.on(",").join(includeFieldsDefault)));
+                            remote.put("server", ownerServer);
+
+                            remoteCollection.add(remote);
+                            treeNode.put(node.mName, remote);
                         }
                     }
                 } else {
@@ -360,8 +406,8 @@ public class ContactsFetcher {
                     }
                 }
             } else {
-                // This is only used on first run (node is ROOT)
-                // do nothing more than launch the crawl
+                // This is only used if node is ROOT
+                // skip it and launch the crawl on level-1 folders
                 for (FolderNode subnode : node.mSubfolders) {
                     handleFolderNode(subnode, mbx, treeNode);
                 }
@@ -369,58 +415,176 @@ public class ContactsFetcher {
         }
     }
 
-    private void crawlContacts() throws ServiceException {
-        ItemId root = new ItemId(mbox.getAccount().getId(), Mailbox.ID_FOLDER_USER_ROOT);
+    private void crawlContacts(ItemId root) throws ServiceException {
         FolderNode tree = mbox.getFolderTree(octxt, root, true);
         handleFolderNode(tree, mbox, addressBookTree);
     }
 
+    private String getAuthToken() {
+        try {
+            AuthToken token = octxt.getAuthToken();
+            return token.getEncoded();
+        } catch (ServiceException|AuthTokenException e) {
+            logger.warn("Unable to get encoded auth token: " + e);
+        }
+        return null;
+    }
+
+    private String getRemoteFolder(String serverName, String token, String data) {
+        try {
+            DefaultHttpClient httpClient = new DefaultHttpClient();
+
+            Server server = Provisioning.getInstance().getServerByName(serverName);
+            ZAttrProvisioning.MailMode mode = server.getMailMode();
+            String url = "";
+            if (mode.isHttp()) {
+                url += "http://"+serverName+":"+server.getMailPortAsString();
+            } else {
+                url += "https://"+serverName+":"+server.getMailSSLPortAsString();
+            }
+            url += "/service/extension/crunchmail/getremotefolder";
+
+            HttpPost req = new HttpPost(url);
+
+            req.addHeader("Authorization", "TOKEN "+token);
+            req.addHeader("Content-Type", "application/json");
+
+            StringEntity params = new StringEntity(data);
+            req.setEntity(params);
+
+            HttpResponse resp = httpClient.execute(req);
+            String json = EntityUtils.toString(resp.getEntity(), "UTF-8");
+
+            if (resp.getStatusLine().getStatusCode() != 200) {
+                Gson gson = new Gson();
+                Type type = new TypeToken<Map<String, String>>(){}.getType();
+                Map<String, String> ret = gson.fromJson(json, type);
+
+			    throw new RuntimeException("Request for remote folder returned an error: " + ret.get("error"));
+		    }
+
+            return json;
+
+        } catch (ServiceException|IOException e) {
+            throw new RuntimeException("Error while making HTTP request for remote folder: " + e);
+        }
+
+    }
+
     public Map<String, List<HashMap<String, Object>>> fetchCollection() throws ServiceException {
-        HashMap<String, List<HashMap<String, Object>>> collection = new HashMap<String, List<HashMap<String, Object>>>();
+        ItemId root = new ItemId(mbox.getAccount().getId(), Mailbox.ID_FOLDER_USER_ROOT);
+        return fetchCollection(root);
+    }
 
-        crawlContacts();
+    public Map<String, List<HashMap<String, Object>>> fetchCollection(ItemId root) throws ServiceException {
+        Map<String, List<HashMap<String, Object>>> collection = new HashMap<String, List<HashMap<String, Object>>>();
 
+        crawlContacts(root);
+
+        String token = getAuthToken();
+        if (token != null) {
+            for (HashMap<String, String> remote : remoteCollection) {
+                String server = (String) remote.get("server");
+                remote.remove("server");
+                remote.put("tree", "false");
+
+                Gson gson = new Gson();
+                try {
+
+                    String resp = getRemoteFolder(server, token, gson.toJson(remote));
+                    Type type = new TypeToken<Map<String, List<HashMap<String, Object>>>>(){}.getType();
+                    Map<String, List<HashMap<String, Object>>> remoteFolderCollection = gson.fromJson(resp, type);
+                    // Merge in our collections
+                    contactsCollection.addAll(remoteFolderCollection.get("contacts"));
+                    groupsCollection.addAll(remoteFolderCollection.get("groups"));
+
+                } catch (RuntimeException e) {
+                    // HTTP request failed. Log error, set an empty object and move on
+                    logger.warn("Could not get remote folder collection. Error: "+ e.getMessage());
+                }
+            }
+        }
         collection.put("contacts", contactsCollection);
         collection.put("groups", groupsCollection);
         return collection;
     }
 
-    private void recurseTree(HashMap<String, Object> entry) throws ServiceException {
+    private void getRemoteTreeOrRecurse(Map.Entry<String, Object> entry) {
         @SuppressWarnings("unchecked")
-        List<Integer> contacts_index = (List<Integer>) entry.get("contacts_index");
-        Set<HashMap<String, Object>> treeNodeContacts = new HashSet<HashMap<String, Object>>();
-        for (int index : contacts_index) {
-            treeNodeContacts.add(contactsCollection.get(index));
-        }
-        entry.put("contacts", treeNodeContacts);
-        entry.remove("contacts_index");
+        HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
+        if (value.get("server") != null) {
+            logger.debug("Value: " + value);
+            // HTTP request + replace entry value
+            String token = getAuthToken();
+            if (token != null) {
+                String server = (String) value.get("server");
+                value.remove("server");
 
-        @SuppressWarnings("unchecked")
-        List<Integer> groups_index = (List<Integer>) entry.get("groups_index");
-        Set<HashMap<String, Object>> treeNodeGroups = new HashSet<HashMap<String, Object>>();
-        for (int index : groups_index) {
-            treeNodeGroups.add(groupsCollection.get(index));
-        }
-        entry.put("groups", treeNodeGroups);
-        entry.remove("groups_index");
+                value.put("tree", "true");
 
-        @SuppressWarnings("unchecked")
-        HashMap<String, Object> subfolders = (HashMap<String, Object>) entry.get("_subfolders");
-        for (Map.Entry<String, Object> subfolder : subfolders.entrySet()) {
+                Gson gson = new Gson();
+                try {
+
+                    String resp = getRemoteFolder(server, token, gson.toJson(value));
+                    Type type = new TypeToken<HashMap<String, Object>>(){}.getType();
+                    HashMap<String, Object> remoteTree = gson.fromJson(resp, type);
+                    // Replace entry value with result value
+                    // This way we keep the mountpoint name instead of the remote folder name
+                    entry.setValue(remoteTree.get(remoteTree.keySet().toArray()[0]));
+
+                } catch (RuntimeException e) {
+
+                    // HTTP request failed. Log error, set an empty object and move on
+                    logger.warn("Could not get remote folder "+ entry.getKey() + ". Error: "+ e.getMessage());
+                    value = new HashMap<String, Object>();
+                    value.put("contacts", new ArrayList<HashMap<String, Object>>());
+                    value.put("groups", new ArrayList<HashMap<String, Object>>());
+                    value.put("_subfolders", new HashMap<String, Object>());
+                    value.put("_attrs", new HashMap<String, Object>());
+                    entry.setValue(value);
+
+                }
+            }
+        } else {
+
             @SuppressWarnings("unchecked")
-            HashMap<String, Object> value = (HashMap<String, Object>) subfolder.getValue();
-            recurseTree(value);
+            List<Integer> contacts_index = (List<Integer>) value.get("contacts_index");
+            List<HashMap<String, Object>> treeNodeContacts = new ArrayList<HashMap<String, Object>>();
+            for (int index : contacts_index) {
+                treeNodeContacts.add(contactsCollection.get(index));
+            }
+            value.put("contacts", treeNodeContacts);
+            value.remove("contacts_index");
+
+            @SuppressWarnings("unchecked")
+            List<Integer> groups_index = (List<Integer>) value.get("groups_index");
+            List<HashMap<String, Object>> treeNodeGroups = new ArrayList<HashMap<String, Object>>();
+            for (int index : groups_index) {
+                treeNodeGroups.add(groupsCollection.get(index));
+            }
+            value.put("groups", treeNodeGroups);
+            value.remove("groups_index");
+
+            @SuppressWarnings("unchecked")
+            HashMap<String, Object> subfolders = (HashMap<String, Object>) value.get("_subfolders");
+            for (Map.Entry<String, Object> subfolder : subfolders.entrySet()) {
+                getRemoteTreeOrRecurse(subfolder);
+            }
+
         }
     }
 
     public Map<String, Object> fetchTree() throws ServiceException {
+        ItemId root = new ItemId(mbox.getAccount().getId(), Mailbox.ID_FOLDER_USER_ROOT);
+        return fetchTree(root);
+    }
 
-        crawlContacts();
+    public Map<String, Object> fetchTree(ItemId root) throws ServiceException {
+
+        crawlContacts(root);
 
         for (Map.Entry<String, Object> entry : addressBookTree.entrySet()) {
-            @SuppressWarnings("unchecked")
-            HashMap<String, Object> value = (HashMap<String, Object>) entry.getValue();
-            recurseTree(value);
+            getRemoteTreeOrRecurse(entry);
         }
 
         return addressBookTree;

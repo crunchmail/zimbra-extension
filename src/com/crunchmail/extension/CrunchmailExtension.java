@@ -4,10 +4,12 @@ import com.zimbra.common.util.ZimbraLog;
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.cs.extension.ExtensionException;
 import com.zimbra.cs.extension.ZimbraExtension;
+import com.zimbra.cs.extension.ExtensionDispatcherServlet;
 import com.zimbra.soap.SoapServlet;
 
 import com.crunchmail.extension.lib.ZimbraVersion;
 import com.crunchmail.extension.soap.CrunchmailDocumentService;
+import com.crunchmail.extension.http.handlers.RemoteFolderHandler;
 
 /**
 * Zimbra Serverextension for the Crunchmail-Zimlet
@@ -51,6 +53,10 @@ public class CrunchmailExtension implements ZimbraExtension{
         SoapServlet.addService(
         "SoapServlet",
         new CrunchmailDocumentService()
+        );
+
+        ExtensionDispatcherServlet.register(
+            this, new RemoteFolderHandler()
         );
 
     }
