@@ -90,8 +90,6 @@ public class GetContactsTree extends DocumentHandler {
         response.addAttribute("timer", timer.toString());
         mLogger.info("Fetched contacts in: "+timer);
 
-        mLogger.debug(response.prettyPrint());
-
         return response;
     }
 }
