@@ -18,8 +18,9 @@ import com.zimbra.cs.mailbox.OperationContext;
 
 import com.crunchmail.extension.Logger;
 import com.crunchmail.extension.ContactsFetcher;
+import com.crunchmail.extension.ContactsCrawler.Tree;
 import com.crunchmail.extension.ListsFetcher;
-import com.crunchmail.extension.soap.ResponseHelpers;
+import com.crunchmail.extension.ListsFetcher.ListsCollection;
 
 
 /**
@@ -42,91 +43,7 @@ import com.crunchmail.extension.soap.ResponseHelpers;
  */
 public class GetContactsTree extends DocumentHandler {
 
-    // private boolean asTree;
-    private Logger logger;
-    private ResponseHelpers helpers = new ResponseHelpers();
-
-    private void recurseTree(Element el, String name, Map<String, Object> entry) throws ServiceException {
-        Element f = el.addUniqueElement(name);
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> contacts = (List<Map<String, Object>>) entry.get("contacts");
-        if (contacts == null || contacts.isEmpty()) {
-            // add it anyway so client doesn't have to test
-            f.addNonUniqueElement("contacts");
-        } else {
-            for (Map<String, Object> contact : contacts) {
-                Element c = f.addNonUniqueElement("contacts");
-                helpers.makeContactElement(c, contact);
-            }
-        }
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> groups = (List<Map<String, Object>>) entry.get("groups");
-        if (groups == null || groups.isEmpty()) {
-            // add it anyway so client doesn't have to test
-            f.addNonUniqueElement("groups");
-        } else {
-            for (Map<String, Object> group : groups) {
-                Element g = f.addNonUniqueElement("groups");
-                helpers.makeGroupElement(g, group);
-            }
-        }
-
-        Element a = f.addUniqueElement("_attrs");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> attrs = (Map<String, Object>) entry.get("_attrs");
-        for (Map.Entry<String, Object> attr : attrs.entrySet()) {
-            if (attr.getValue() instanceof String) {
-                a.addAttribute(attr.getKey(), (String) attr.getValue());
-            } else if (attr.getValue() instanceof Boolean) {
-                a.addAttribute(attr.getKey(), (Boolean) attr.getValue());
-            }
-        }
-
-        Element s = f.addUniqueElement("_subfolders");
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> subfolders = (Map<String, Object>) entry.get("_subfolders");
-        for (Map.Entry<String, Object> subfolder : subfolders.entrySet()) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> value = (Map<String, Object>) subfolder.getValue();
-            recurseTree(s, subfolder.getKey(), value);
-        }
-    }
-
-    private void handleTree(Mailbox mbox, Account account, Element response, boolean debug) throws ServiceException {
-        ContactsFetcher fetcher = new ContactsFetcher(mbox, account, debug);
-        Map<String, Object> tree = fetcher.fetchTree();
-
-        Element t = response.addUniqueElement("tree");
-
-        for (Map.Entry<String, Object> entry : tree.entrySet()) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> value = (Map<String, Object>) entry.getValue();
-            recurseTree(t, entry.getKey(), value);
-        }
-    }
-
-    private void handleLists(Account account, Element response, boolean debug) throws ServiceException {
-        ListsFetcher fetcher = new ListsFetcher(account, debug);
-        List<HashMap<String, Object>> collection = fetcher.fetch();
-
-        for (HashMap<String, Object> list : collection) {
-            Element l = response.addNonUniqueElement("dls");
-
-            l.addAttribute("id", (String) list.get("id"));
-            l.addAttribute("name", (String) list.get("name"));
-            l.addAttribute("email", (String) list.get("email"));
-
-            @SuppressWarnings("unchecked")
-            Set<HashMap<String, Object>> members = (Set<HashMap<String, Object>>) list.get("members");
-            for (HashMap<String, Object> contact : members) {
-                Element m = l.addNonUniqueElement("members");
-                helpers.makeContactElement(m, contact);
-            }
-        }
-    }
+    private Logger mLogger;
 
     /**
      * Handle the SOAP the request
@@ -139,7 +56,7 @@ public class GetContactsTree extends DocumentHandler {
     public Element handle(Element request, Map<String, Object> context) throws ServiceException {
 
         boolean debug = request.getAttributeBool("debug", false);
-        logger = new Logger(debug);
+        mLogger = new Logger(debug);
 
         // We time fetch exec time to return it to the client
         Stopwatch timer = new Stopwatch().start();
@@ -150,8 +67,13 @@ public class GetContactsTree extends DocumentHandler {
 
         Element response = zsc.createElement("GetContactsTreeResponse");
 
-        handleTree(mbox, account, response, debug);
-        handleLists(account, response, debug);
+        ContactsFetcher contactsFetcher = new ContactsFetcher(mbox, account, debug);
+        Tree contactsTree = contactsFetcher.fetchTree();
+        contactsTree.toElement(response);
+
+        ListsFetcher listsFetcher = new ListsFetcher(account, debug);
+        ListsCollection listsCollection = listsFetcher.fetch();
+        listsCollection.toElement(response);
 
         OperationContext octxt = new OperationContext(mbox);
         List<Tag> tags = mbox.getTagList(octxt);
@@ -166,7 +88,9 @@ public class GetContactsTree extends DocumentHandler {
         timer.stop();
 
         response.addAttribute("timer", timer.toString());
-        logger.info("Fetched contacts in: "+timer);
+        mLogger.info("Fetched contacts in: "+timer);
+
+        mLogger.debug(response.prettyPrint());
 
         return response;
     }

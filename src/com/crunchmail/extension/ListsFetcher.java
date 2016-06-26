@@ -4,10 +4,12 @@ import java.util.Set;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.HashMap;
 import com.google.common.collect.Sets;
 
 import com.zimbra.common.service.ServiceException;
+import com.zimbra.common.soap.Element;
 import com.zimbra.common.account.Key;
 import com.zimbra.cs.account.Provisioning;
 import com.zimbra.cs.account.Account;
@@ -22,155 +24,150 @@ import com.crunchmail.extension.UserSettings;
  */
 public class ListsFetcher {
 
-    private Logger logger;
+    public class ListsCollection {
+        private List<DistributionList> mCollection = new ArrayList<DistributionList>();
 
-    private UserSettings settings;
-    private Account account;
+        void add(DistributionList list) {
+            mCollection.add(list);
+        }
+
+        public void toElement(Element el) {
+            if (mCollection.isEmpty()) {
+                // add empty element so client doesn't have to test
+                el.addNonUniqueElement("dls");
+            } else {
+                for (DistributionList list : mCollection) {
+                    Element l = el.addNonUniqueElement("dls");
+                    list.toElement(l);
+                }
+            }
+        }
+    }
+
+    class DistributionList {
+        private String mId;
+        private String mName;
+        private String mEmail;
+        private Set<Member> mMembers = Sets.newHashSet();
+
+        DistributionList(Group group) throws ServiceException {
+            mId = group.getId();
+            mName = group.getDisplayName();
+            mEmail = group.getMail();
+
+            // Use a set to keep track of nested groups and avoid loops
+            // and add ourselves
+            Set<String> nestedGroups = Sets.newHashSet();
+            nestedGroups.add(group.getMail());
+
+            handleMembers(group, nestedGroups, mId);
+        }
+
+        private void handleMembers(Group group, Set<String> nestedGroups, String groupId) throws ServiceException {
+            Provisioning prov = Provisioning.getInstance();
+            String[] members = group.getAllMembers();
+
+            for (String groupMember : members) {
+
+                Account acct = prov.getAccount(groupMember);
+                if (acct == null) {
+                    // not an account, probably another list
+                    Group nested = prov.getGroup(Key.DistributionListBy.name, groupMember);
+                    if (nested != null && !nestedGroups.contains(groupMember)) {
+                        nestedGroups.add(groupMember);
+                        handleMembers(nested, nestedGroups, nested.getId());
+                        continue;
+                    } else {
+                        // something else or already handled, ignore
+                        mLogger.debug("Ignoring member in list " + group.getMail() + ". Either a nested group already handled or an unknown type: " + groupMember);
+                        continue;
+                    }
+                }
+
+                Member member = new Member(groupMember, acct.getGivenName(), acct.getSn(), groupId);
+                mMembers.add(member);
+            }
+        }
+
+        void toElement(Element l) {
+            l.addAttribute("id", mId);
+            l.addAttribute("name", mName);
+            l.addAttribute("email", mEmail);
+            if (!mMembers.isEmpty()) {
+                for (Member member : mMembers) {
+                    Element m = l.addNonUniqueElement("members");
+                    member.toElement(m);
+                }
+            }
+        }
+    }
+
+    class Member {
+        private String mEmail;
+        private Map<String, String> mProperties = new HashMap<String, String>();
+        private String mSourceType = "zimbra";
+        private String mSourceRef;
+
+        Member(String member, String firstName, String lastName, String groupId) {
+            mEmail = member;
+            mProperties.put("firstName", firstName != null ? firstName : "");
+            mProperties.put("lastName", lastName != null ? lastName : "");
+            mSourceRef = "dl:" + groupId;
+        }
+
+        void toElement(Element m) {
+            m.addAttribute("email", mEmail);
+            Element p = m.addUniqueElement("properties");
+            for (Map.Entry<String, String> property : mProperties.entrySet()) {
+                p.addAttribute(property.getKey(), property.getValue());
+            }
+            m.addAttribute("sourceType", mSourceType);
+            m.addAttribute("sourceRef", mSourceRef);
+        }
+    }
+
+    Logger mLogger;
+    UserSettings mSettings;
+    Account mAccount;
 
     public ListsFetcher(Account account) throws ServiceException {
         this(account, false);
     }
 
     public ListsFetcher(Account account, boolean debug) throws ServiceException {
-        this.account = account;
-        settings = new UserSettings(account);
-        logger = new Logger(debug);
-    }
-
-    /**
-     * Handle parsing Group members recursively.
-     * This version is usually called first when parsing group members.
-     * The group's email address will be passed along to be used in
-     * sourceRef for the nested members.
-     * @param  group com.zimbra.cs.account.Group
-     * @param  listMembers reference to a List<HashMap<String, Object>>
-     * @param  nestedGroups reference to a Set<String>
-     */
-    private void handleGroupMembers(Group group, Set<HashMap<String, Object>> listMembers, Set<String> nestedGroups) throws ServiceException {
-        handleGroupMembers(group, listMembers, nestedGroups, group.getMail());
-    }
-
-    /**
-     * Handle parsing Group members recursively
-     * @param  group com.zimbra.cs.account.Group
-     * @param  listMembers reference to a List<HashMap<String, Object>>
-     * @param  nestedGroups reference to a Set<String>
-     * @param  listMail String
-     */
-    private void handleGroupMembers(Group group, Set<HashMap<String, Object>> listMembers, Set<String> nestedGroups, String listMail) throws ServiceException {
-
-        Provisioning prov = Provisioning.getInstance();
-        String[] members = group.getAllMembers();
-        for (String member : members) {
-            HashMap<String, Object> m = new HashMap<String, Object>();
-
-            Account acct = prov.getAccount(member);
-            if (acct == null) {
-                // not an account, probably another list
-                Group nested = prov.getGroup(Key.DistributionListBy.name, member);
-                if (nested != null && !nestedGroups.contains(member)) {
-                    nestedGroups.add(member);
-                    handleGroupMembers(nested, listMembers, nestedGroups, listMail);
-                    continue;
-                } else {
-                    // something else or already handled, ignore
-                    logger.debug("Ignoring member in list "+group.getMail()+". Either a nested group already handled or an unknown type: "+member);
-                    continue;
-                }
-            }
-            m.put("email", member);
-
-            HashMap<String, String> properties = new HashMap<String, String>();
-            if (acct.getGivenName() != null) {
-                properties.put("firstName", acct.getGivenName());
-            }
-            if (acct.getSn() != null) {
-                properties.put("lastName", acct.getSn());
-            }
-            m.put("properties", properties);
-
-            m.put("sourceType", "zimbra");
-            m.put("sourceRef", "dl:"+listMail);
-
-            listMembers.add(m);
-        }
-
-    }
-
-    /**
-     * Handles parsing a Group (distribution list)
-     * @param  group com.zimbra.cs.account.Group
-     * @return       A HashMap formatted like:
-     *
-     * 	[
-     * 	  {
-     * 		"name": "displayName",
-     * 		"email": "group email",
-     * 		"members": [
-     * 			{
-     * 				"email": "member email",
-     * 				"properties": {
-     * 					"firstName": "sn",
-     * 	       			"lastName": "givenName"
-     * 				},
-     * 				"sourceType": "zimbra",
-     * 				"sourceRef": "dl:group-email"
-     * 			},
-     * 			...
-     * 		]
-     * 	  },
-     * 	  ...
-     * 	]
-     */
-    private HashMap<String, Object> handleGroup(Group group) throws ServiceException {
-        HashMap<String, Object> list = new HashMap<String, Object>();
-
-        logger.debug("List: " + group.getMail());
-
-        list.put("id", group.getId());
-        list.put("name", group.getDisplayName());
-        list.put("email", group.getMail());
-        list.put("members", new HashSet<HashMap<String, Object>>());
-
-        // Use a reference to add object in handleGroupMembers
-        // and we use a Set to avoid duplicates with nested lists
-        @SuppressWarnings("unchecked")
-        Set<HashMap<String, Object>> listMembers = (Set<HashMap<String, Object>>) list.get("members");
-
-        // Use a set to keep track of nested groups and avoid loops
-        // and add ourselves
-        Set<String> nestedGroups = Sets.newHashSet();
-        nestedGroups.add(group.getMail());
-
-        handleGroupMembers(group, listMembers, nestedGroups);
-
-        return list;
+        mAccount = account;
+        mSettings = new UserSettings(account);
+        mLogger = new Logger(debug);
     }
 
     private boolean shouldInclude(Group group) {
-        boolean includeHidden = settings.getBool(UserSettings.DLIST_INCLUDE_HIDE_IN_GAL, true);
+        boolean includeHidden = mSettings.getBool(UserSettings.DLIST_INCLUDE_HIDE_IN_GAL, true);
         if (group.hideInGal() && !includeHidden) {
             return false;
         }
         return true;
     }
 
-    public List<HashMap<String, Object>> fetch() throws ServiceException {
-        List<HashMap<String, Object>> collection = new ArrayList<HashMap<String, Object>>();
+    /**
+     * [fetch description]
+     * @return [description]
+     */
+    public ListsCollection fetch() throws ServiceException {
+        ListsCollection collection = new ListsCollection();
 
         // Always get the lists the account is owner of
-        logger.debug("Crawling distribution lists (ownerOf)");
-        Set<Group> ownerOf = Group.GroupOwner.getOwnedGroups(account);
+        mLogger.debug("Crawling distribution lists (ownerOf)");
+        Set<Group> ownerOf = Group.GroupOwner.getOwnedGroups(mAccount);
 
         // Get the lists the account is member of if configured
         // and deduplicate lists
-        if (settings.getBool(UserSettings.DLIST_MEMBER_OF)) {
-            logger.debug("Crawling distribution lists (memberOf)");
+        if (mSettings.getBool(UserSettings.DLIST_MEMBER_OF)) {
+            mLogger.debug("Crawling distribution lists (memberOf)");
 
             Provisioning prov = Provisioning.getInstance();
             HashMap<String, String> via = new HashMap<String, String>();
 
-            List<Group> memberOf = prov.getGroups(account, settings.getBool(UserSettings.DLIST_DIRECT_MEMBER_ONLY), via);
+            List<Group> memberOf = prov.getGroups(mAccount, mSettings.getBool(UserSettings.DLIST_DIRECT_MEMBER_ONLY), via);
 
             Set<Entry> combined = Sets.newHashSet();
             Set<String> combinedIds = Sets.newHashSet();
@@ -196,7 +193,7 @@ public class ListsFetcher {
 
             for (Entry entry : combined) {
                 if (shouldInclude((Group) entry)) {
-                    HashMap<String, Object> list = handleGroup((Group) entry);
+                    DistributionList list = new DistributionList((Group) entry);
                     collection.add(list);
                 }
             }
@@ -205,7 +202,7 @@ public class ListsFetcher {
             if (ownerOf != null) {
                 for (Group group : ownerOf) {
                     if (shouldInclude(group)) {
-                        HashMap<String, Object> list = handleGroup(group);
+                        DistributionList list = new DistributionList(group);
                         collection.add(list);
                     }
                 }
@@ -215,4 +212,5 @@ public class ListsFetcher {
 
         return collection;
     }
+
 }

@@ -28,14 +28,16 @@ import com.zimbra.cs.mailbox.OperationContext;
 
 import com.crunchmail.extension.Logger;
 import com.crunchmail.extension.ContactsFetcher;
+import com.crunchmail.extension.ContactsCrawler.Collection;
+import com.crunchmail.extension.ContactsCrawler.Tree;
 
 
 public class RemoteFolderHandler extends ExtensionHttpHandler {
 
-    private HttpServletResponse response;
-    private OperationContext octxt;
+    private HttpServletResponse mResponse;
+    private OperationContext mOctxt;
 
-    private Logger logger = new Logger(true);
+    private Logger mLogger = new Logger(true);
 
     // Handler will be available at http://{my-zimbra-server-url}/service/extension/{path}
     public String getPath() {
@@ -62,11 +64,11 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
                         String token = st.nextToken();
                         AuthToken authToken = AuthToken.getAuthToken(token);
                         if (!authToken.isExpired() && authToken.isZimbraUser()) {
-                            octxt = new OperationContext(authToken.getAccount());
+                            mOctxt = new OperationContext(authToken.getAccount());
                             auth = true;
                         }
                     } catch (ServiceException|AuthTokenException e) {
-                        logger.error("RemoteFolderHandler - Token Authentication Exception: " + e.getMessage());
+                        mLogger.error("RemoteFolderHandler - Token Authentication Exception: " + e.getMessage());
                     }
                 }
             }
@@ -78,12 +80,12 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
     private boolean isAuthorized(Mailbox mbox, ItemId iid) throws ServiceException {
         boolean authorized = false;
         try {
-            mbox.getFolderTree(octxt, iid, true);
+            mbox.getFolderTree(mOctxt, iid, true);
             authorized = true;
         } catch (ServiceException e) {
             if (e.getCode().equals(ServiceException.PERM_DENIED)) {
                 // if it is a permission denied, fail gracefully
-                logger.error("RemoteFolderHandler - Can't access requested item ("+ mbox.getAccount().getId() +":"+ iid.getId() +") with account "+ octxt.getAuthenticatedUser().getId() +". Permission denied.");
+                mLogger.error("RemoteFolderHandler - Can't access requested item ("+ mbox.getAccount().getId() +":"+ iid.getId() +") with account "+ mOctxt.getAuthenticatedUser().getId() +". Permission denied.");
             } else {
                 // re-raise
                 throw e;
@@ -111,7 +113,7 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
         } else {
 
             try {
-                logger.debug("Remove server asking for folder content (account: "+req.get("account")+", item: "+req.get("item")+", remote account: "+octxt.getAuthenticatedUser().getId()+")");
+                mLogger.debug("Remove server asking for folder content (account: "+req.get("account")+", item: "+req.get("item")+", remote account: "+mOctxt.getAuthenticatedUser().getId()+")");
                 Account account = Provisioning.getInstance().getAccount(req.get("account"));
                 Mailbox mbox = MailboxManager.getInstance().getMailboxByAccountId(req.get("account"));
                 ItemId iid = new ItemId(req.get("account"), Integer.parseInt(req.get("item")));
@@ -121,10 +123,10 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
                     ContactsFetcher fetcher = new ContactsFetcher(mbox, account, true, includeFieldsDefault, true);
 
                     if (Boolean.parseBoolean(req.get("tree"))) {
-                        Map<String, Object> tree = fetcher.fetchTree(iid);
+                        Tree tree = fetcher.fetchTree(iid);
                         sendResponse(tree);
                     } else {
-                        Map<String, List<HashMap<String, Object>>> collection = fetcher.fetchCollection(iid);
+                        Collection collection = fetcher.fetchCollection(iid);
                         sendResponse(collection);
                     }
                 } else {
@@ -132,7 +134,7 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
                 }
 
             } catch (Exception e) {
-                logger.error("RemoteFolderHandler - Exception while processing request: " + e);
+                mLogger.error("RemoteFolderHandler - Exception while processing request: " + e);
                 sendResponse("Error while processing request.", HttpServletResponse.SC_INTERNAL_SERVER_ERROR );
             }
         }
@@ -150,14 +152,14 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
 
     private void sendResponse(Object payload, int status) throws IOException{
         Gson gson = new Gson();
-        response.setContentType("application/json");
-        response.setStatus(status);
-        response.getOutputStream().print(gson.toJson(payload));
-        response.getOutputStream().flush();
+        mResponse.setContentType("application/json");
+        mResponse.setStatus(status);
+        mResponse.getOutputStream().print(gson.toJson(payload));
+        mResponse.getOutputStream().flush();
     }
 
     public void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException, ServletException {
-        response = resp;
+        mResponse = resp;
 
         try {
             if (authenticateRequest(req)) {
@@ -166,7 +168,7 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
                 sendResponse("Token authentication failed.", HttpServletResponse.SC_UNAUTHORIZED);
             }
         } catch (ServiceException e) {
-            logger.error("RemoteFolderHandler - Exception while processing request: " + e);
+            mLogger.error("RemoteFolderHandler - Exception while processing request: " + e);
         }
     }
 }
