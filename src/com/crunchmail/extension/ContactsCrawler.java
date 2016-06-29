@@ -523,8 +523,6 @@ public abstract class ContactsCrawler {
                 // but we have to catch it. Log a warning if it happens.
                 mLogger.warn("We got a FolderNode ignored exception on ROOT. Something is wrong !", e);
             }
-            Gson gson = new Gson();
-            mLogger.debug("Tree: " + gson.toJson(mTree));
         } else {
             mCollection = new Collection();
             try {
@@ -620,7 +618,8 @@ public abstract class ContactsCrawler {
                 try {
 
                     // will throw an exception if current user does not have sufficient permissions on owner's object
-                    FolderNode sharedFolder = rmbox.getFolderTree(mOctxt, itemId, true);
+                    // IMPORTANT: needs false as last argument for exception to be thrown
+                    FolderNode sharedFolder = rmbox.getFolderTree(mOctxt, itemId, false);
 
                     // Two options here :
                     //
@@ -709,7 +708,7 @@ public abstract class ContactsCrawler {
         }
     }
 
-    private void handleRemoteFolderContent(String serverName, String ownerId, int itemId, String nodeName, String includeFields, String color, Tree treeNode) throws ServiceException {
+    private void handleRemoteFolderContent(String serverName, String ownerId, int itemId, String nodeName, String includeFields, String color, Tree treeNode) throws ServiceException, FolderNodeIgnoredException {
         if (mAuthToken != null) {
             try {
                 DefaultHttpClient httpClient = new DefaultHttpClient();
@@ -759,14 +758,17 @@ public abstract class ContactsCrawler {
                     Map<String, String> ret = gson.fromJson(json, type);
 
     			    mLogger.warn("Request for remote folder returned an error: " + ret.get("error"));
+                    throw new FolderNodeIgnoredException();
     		    }
 
             } catch (IOException e) {
                 mLogger.warn("Error while making HTTP request for remote folder: " + e);
+                throw new FolderNodeIgnoredException();
             }
 
         } else {
             mLogger.warn("Can't get remote folder, auth token is null (id: " + itemId + ", account: " + ownerId + ", server: " + serverName + ")");
+            throw new FolderNodeIgnoredException();
         }
     }
 }

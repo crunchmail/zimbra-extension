@@ -78,21 +78,22 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
     }
 
     private boolean isAuthorized(Mailbox mbox, ItemId iid) throws ServiceException {
-        boolean authorized = false;
         try {
-            mbox.getFolderTree(mOctxt, iid, true);
-            authorized = true;
+            // will throw an exception if current user does not have sufficient permissions on owner's object
+            // IMPORTANT: needs false as last argument for exception to be thrown
+            mbox.getFolderTree(mOctxt, iid, false);
         } catch (ServiceException e) {
             if (e.getCode().equals(ServiceException.PERM_DENIED)) {
                 // if it is a permission denied, fail gracefully
                 mLogger.error("RemoteFolderHandler - Can't access requested item ("+ mbox.getAccount().getId() +":"+ iid.getId() +") with account "+ mOctxt.getAuthenticatedUser().getId() +". Permission denied.");
+                return false;
             } else {
                 // re-raise
                 throw e;
             }
         }
 
-        return authorized;
+        return true;
     }
 
     private void processRequest(HttpServletRequest request) throws ServletException, IOException, ServiceException {
@@ -147,7 +148,7 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
     private void sendResponse(String error, int status) throws IOException{
         Map<String, String> payload = new HashMap<String, String>();
         payload.put("error", error);
-        sendResponse(payload, HttpServletResponse.SC_OK);
+        sendResponse(payload, status);
     }
 
     private void sendResponse(Object payload, int status) throws IOException{
