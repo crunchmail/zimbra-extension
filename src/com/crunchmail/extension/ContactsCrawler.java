@@ -608,48 +608,57 @@ public abstract class ContactsCrawler {
 
             // Check if account is on the same server, otherwise we can't do anything else here
             Account ownerAccount = Provisioning.getInstance().getAccount(ownerId);
-            String currentServer = mbox.getAccount().getMailHost();
-            String ownerServer = ownerAccount.getMailHost();
 
-            if (currentServer.equals(ownerServer)) {
-                mLogger.debug("Target account is on same server, crawling mountpoint");
-                Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(ownerId, false);
+            if (ownerAccount != null) {
 
-                try {
+                String currentServer = mbox.getAccount().getMailHost();
+                String ownerServer = ownerAccount.getMailHost();
 
-                    // will throw an exception if current user does not have sufficient permissions on owner's object
-                    // IMPORTANT: needs false as last argument for exception to be thrown
-                    FolderNode sharedFolder = rmbox.getFolderTree(mOctxt, itemId, false);
+                if (currentServer.equals(ownerServer)) {
+                    mLogger.debug("Target account is on same server, crawling mountpoint");
+                    Mailbox rmbox = MailboxManager.getInstance().getMailboxByAccountId(ownerId, false);
 
-                    // Two options here :
-                    //
-                    //   - Mountpoint is a classic share: treat it normally
-                    //   - Mountpoint is the Root of a full-account share: register the node with the local name but ignore its content
-                    boolean skipContent = false;
-                    if (sharedFolder.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
-                        skipContent = true;
+                    try {
+
+                        // will throw an exception if current user does not have sufficient permissions on owner's object
+                        // IMPORTANT: needs false as last argument for exception to be thrown
+                        FolderNode sharedFolder = rmbox.getFolderTree(mOctxt, itemId, false);
+
+                        // Two options here :
+                        //
+                        //   - Mountpoint is a classic share: treat it normally
+                        //   - Mountpoint is the Root of a full-account share: register the node with the local name but ignore its content
+                        boolean skipContent = false;
+                        if (sharedFolder.mFolder.getId() == Mailbox.ID_FOLDER_USER_ROOT) {
+                            skipContent = true;
+                        }
+                        handleFolderContent(sharedFolder, node.mName, rmbox, treeNode, skipContent);
+
+                    } catch (ServiceException e) {
+
+                        if (e.getCode().equals(ServiceException.PERM_DENIED)) {
+                            // if it is a permission denied, fail gracefully
+                            mLogger.debug("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
+                            throw new FolderNodeIgnoredException();
+                        } else {
+                            // re-raise
+                            throw e;
+                        }
+
                     }
-                    handleFolderContent(sharedFolder, node.mName, rmbox, treeNode, skipContent);
+                } else {
+                    // Request the folder content from the other server
+                    mLogger.debug("Fetching content from remote server");
+                    String includeFields = mSettings.get(UserSettings.CONTACTS_ATTRS, Joiner.on(",").join(mIncludeFieldsDefault));
+                    String color = node.mFolder.getRgbColor().toString();
 
-                } catch (ServiceException e) {
-
-                    if (e.getCode().equals(ServiceException.PERM_DENIED)) {
-                        // if it is a permission denied, fail gracefully
-                        mLogger.debug("Ignoring shared address book: " + mp.getPath() + ". Permission denied.");
-                        throw new FolderNodeIgnoredException();
-                    } else {
-                        // re-raise
-                        throw e;
-                    }
-
+                    handleRemoteFolderContent(ownerServer, ownerId, itemId.getId(), node.mName, includeFields, color, treeNode);
                 }
             } else {
-                // Request the folder content from the other server
-                mLogger.debug("Fetching content from remote server");
-                String includeFields = mSettings.get(UserSettings.CONTACTS_ATTRS, Joiner.on(",").join(mIncludeFieldsDefault));
-                String color = node.mFolder.getRgbColor().toString();
-
-                handleRemoteFolderContent(ownerServer, ownerId, itemId.getId(), node.mName, includeFields, color, treeNode);
+                // In some odd cases, the owner can be null.
+                // In this case, ignore the mountpoint
+                mLogger.debug("Ignoring shared address book: " + mp.getPath() + ". Owner is null.");
+                throw new FolderNodeIgnoredException();
             }
         }
     }
