@@ -1,5 +1,7 @@
 package com.crunchmail.extension;
 
+import java.util.Set;
+import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -17,6 +19,9 @@ import com.google.common.base.Strings;
 import com.google.common.base.Joiner;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import com.google.gson.JsonParseException;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.AddressException;
 
 import com.zimbra.common.service.ServiceException;
 import com.zimbra.common.mailbox.ContactConstants;
@@ -50,6 +55,7 @@ import com.crunchmail.extension.UserSettings;
 public abstract class ContactsCrawler {
 
     private static class NoMailException extends Exception {}
+    private static class InvalidMailException extends Exception {}
     private static class FolderNodeIgnoredException extends Exception {}
     private static class EmptyGroupException extends Exception {}
 
@@ -206,15 +212,36 @@ public abstract class ContactsCrawler {
         private String mName;
         private Map<String, String> mProperties = new HashMap<String, String>();
         private List<String> mTags = new ArrayList<String>();
-        private String mSourceType = "zimbra";
-        private String mSourceRef;
+        private String mSourceType;
+        public String mSourceRef;
         private boolean mGroupMember = false;
 
-        public ContactObject(Contact contact) throws ServiceException, NoMailException {
+        private String parseAddress(String headerv) {
+    		String retValue = null;
+
+    		if (headerv.contains("<"))
+    			retValue = headerv.substring(headerv.indexOf("<")+1, headerv.indexOf(">",headerv.indexOf("<")));
+    		else
+    			retValue = headerv;
+
+    		return retValue.replaceAll(",", "").replaceAll(" ", "").replaceAll("\t", "").replaceAll("\n", "").replaceAll("\r", "");
+	    }
+
+        private boolean validateEmail(String email) {
+            boolean valid = false;
+            try {
+                InternetAddress addr = new InternetAddress(email);
+                addr.validate();
+                valid = true;
+            } catch(AddressException e) {}
+            return valid;
+        }
+
+        public ContactObject(Contact contact) throws ServiceException, NoMailException, InvalidMailException {
             this(contact, null);
         }
 
-        public ContactObject(Object object, String ref) throws ServiceException, NoMailException {
+        public ContactObject(Object object, String ref) throws ServiceException, NoMailException, InvalidMailException {
             String[] includeFields = mSettings.getArray(UserSettings.CONTACTS_ATTRS, ",", mIncludeFieldsDefault);
             // If we're being called by another server, use their defaults instead
             if (mForceConsiderShared) includeFields = mIncludeFieldsDefault;
@@ -229,7 +256,9 @@ public abstract class ContactsCrawler {
 
                 // Inline group member
                 mLogger.debug(debug_prefix + "Making contact object with String instance: " + object);
-                mEmail = (String) object;
+                mEmail = parseAddress((String) object);
+
+                if (!validateEmail(mEmail)) throw new InvalidMailException();
 
                 // set empty properties since we don't have any
                 for (String field : includeFields) {
@@ -237,6 +266,7 @@ public abstract class ContactsCrawler {
                 }
 
                 mSourceRef = ref;
+                mSourceType = "zimbra-group";
 
             } else if (object instanceof Contact) {
 
@@ -248,6 +278,8 @@ public abstract class ContactsCrawler {
                     mLogger.debug(debug_prefix + "Making contact object with Contact instance: " + contactFields.get("email"));
 
                     mEmail = contactFields.get("email");
+
+                    if (!validateEmail(mEmail)) throw new InvalidMailException();
 
                     for (String field : includeFields) {
                         String value = contactFields.get(field);
@@ -267,8 +299,10 @@ public abstract class ContactsCrawler {
                         mId = contact.getAccount().getId() + ":" + contact.getId();
                         // For regular contacts we construct the sourceRef ourselves
                         mSourceRef = "contact:" + mId;
+                        mSourceType = "zimbra-contact";
                     } else {
                         mSourceRef = ref;
+                        mSourceType = "zimbra-group";
                     }
 
                 } else {
@@ -303,6 +337,8 @@ public abstract class ContactsCrawler {
                     throw new NoMailException();
                 }
 
+                if (!validateEmail(mEmail)) throw new InvalidMailException();
+
                 for (String field : includeFields) {
                     if (mGalAttrMap.containsKey(field)) {
                         String galField = mGalAttrMap.get(field);
@@ -318,6 +354,7 @@ public abstract class ContactsCrawler {
                 }
 
                 mSourceRef = ref;
+                mSourceType = "zimbra-group";
 
             } else if (object instanceof Element) {
 
@@ -329,7 +366,7 @@ public abstract class ContactsCrawler {
                     if (field == "email") {
                         String content = eAttr.getText();
                         if (!Strings.isNullOrEmpty(content)) {
-                            mEmail = content;
+                            mEmail = parseAddress(content);
                         }
                     }
                 }
@@ -340,6 +377,8 @@ public abstract class ContactsCrawler {
                     throw new NoMailException();
                 }
 
+                if (!validateEmail(mEmail)) throw new InvalidMailException();
+
                 // TODO: figure out how to better handle properties
                 // for now we set empty ones
                 for (String field : includeFields) {
@@ -347,6 +386,7 @@ public abstract class ContactsCrawler {
                 }
 
                 mSourceRef = ref;
+                mSourceType = "zimbra-group";
             }
         }
 
@@ -405,6 +445,7 @@ public abstract class ContactsCrawler {
         private List<ContactObject> mMembers = new ArrayList<ContactObject>();
         private List<String> mTags = new ArrayList<String>();
         private List<Map<String, String>> mFailedDeref = new ArrayList<Map<String, String>>();
+        public String mSourceRef;
 
         public GroupObject(Contact group, Mailbox mbox) throws ServiceException, EmptyGroupException {
             String encodedGroupMembers = group.get(ContactConstants.A_groupMember);
@@ -434,9 +475,13 @@ public abstract class ContactsCrawler {
                     if (memberObj != null) {
 
                         String ref = "group:" + mId;
+                        // Store sourceRef for existing check
+                        mSourceRef = ref;
                         try {
                             ContactObject contactObj = new ContactObject(memberObj, ref);
                             mMembers.add(contactObj);
+                        } catch (InvalidMailException e) {
+                            mLogger.debug("Ignoring group member with invalid email");
                         } catch (NoMailException e) {}
 
                     } else {
@@ -474,15 +519,56 @@ public abstract class ContactsCrawler {
         }
     }
 
+    public class RemoteResponse {
+        public boolean asTree = false;
+        public Tree tree;
+        public Collection collection;
+        public Set<String> existing;
+        public Collection existingCollection;
+
+        public RemoteResponse(Collection collection) {
+            this.collection = new Collection();
+            this.collection.merge(collection);
+            existingCollection = new Collection();
+            this.existingCollection.merge(mExistingCollection);
+            this.existing = new HashSet<String>(mExisting);
+        }
+
+        public RemoteResponse(Tree tree) {
+            asTree = true;
+            this.tree = new Tree();
+            this.tree.merge(tree);
+            existingCollection = new Collection();
+            this.existingCollection.merge(mExistingCollection);
+            this.existing = new HashSet<String>(mExisting);
+        }
+
+        public void mergeIn(Collection collection) {
+            collection.merge(this.collection);
+        }
+
+        public void mergeIn(Tree tree, String nodeName, String color) {
+            tree.merge(this.tree, nodeName, color);
+        }
+
+        public void copyExisting(Collection existingCollection, Set<String> existing) {
+            existingCollection.merge(this.existingCollection);
+            existing.retainAll(this.existing);
+        }
+    }
+
+    boolean mDebug;
     Logger mLogger;
     Mailbox mMbox;
     OperationContext mOctxt;
     UserSettings mSettings;
     String[] mIncludeFieldsDefault;
     boolean mForceConsiderShared;
+    public Set<String> mExisting;
 
     Collection mCollection;
     Tree mTree;
+    public Collection mExistingCollection = new Collection();
 
     private String mAuthToken;
     private boolean mAsTree = false;
@@ -496,11 +582,13 @@ public abstract class ContactsCrawler {
      * @param   [description]
      * @return  ContactsCrawler instance
      */
-    protected ContactsCrawler(Mailbox mbox, Account account, boolean debug, String[] includeFieldsDefault, boolean forceConsiderShared) throws ServiceException {
+    protected ContactsCrawler(Mailbox mbox, Account account, boolean debug, Set<String> existing, String[] includeFieldsDefault, boolean forceConsiderShared) throws ServiceException {
+        mDebug = debug;
         mLogger = new Logger(debug);
         mMbox = mbox;
         mOctxt = new OperationContext(mbox);
         mSettings = new UserSettings(account);
+        mExisting = existing;
         mIncludeFieldsDefault = includeFieldsDefault;
         mForceConsiderShared = forceConsiderShared;
 
@@ -649,7 +737,7 @@ public abstract class ContactsCrawler {
                 } else {
                     // Request the folder content from the other server
                     mLogger.debug("Fetching content from remote server");
-                    String includeFields = mSettings.get(UserSettings.CONTACTS_ATTRS, Joiner.on(",").join(mIncludeFieldsDefault));
+                    String[] includeFields = mSettings.getArray(UserSettings.CONTACTS_ATTRS, ",", mIncludeFieldsDefault);
                     String color = node.mFolder.getRgbColor().toString();
 
                     handleRemoteFolderContent(ownerServer, ownerId, itemId.getId(), node.mName, includeFields, color, treeNode);
@@ -692,6 +780,12 @@ public abstract class ContactsCrawler {
                         } else {
                             mCollection.mGroups.add(groupObj);
                         }
+
+                        if (mExisting.contains(groupObj.mSourceRef)) {
+                            mExistingCollection.mGroups.add(groupObj);
+                            mExisting.remove(groupObj.mSourceRef);
+                        }
+
                     } catch (EmptyGroupException e) {}
                 } else {
                     try {
@@ -701,12 +795,20 @@ public abstract class ContactsCrawler {
                         } else {
                             mCollection.mContacts.add(contactObj);
                         }
+
+                        if (mExisting.contains(contactObj.mSourceRef)) {
+                            mExistingCollection.mContacts.add(contactObj);
+                            mExisting.remove(contactObj.mSourceRef);
+                        }
+
+                    } catch (InvalidMailException e) {
+                        mLogger.debug("Ignoring contact instance with invalid email");
                     } catch (NoMailException e) {}
                 }
             }
         }
 
-        // Recurse throw subtree
+        // Recurse subtree
         for (FolderNode subnode : node.mSubfolders) {
             try {
                 Tree child = handleFolderNode(subnode, mbox);
@@ -717,7 +819,7 @@ public abstract class ContactsCrawler {
         }
     }
 
-    private void handleRemoteFolderContent(String serverName, String ownerId, int itemId, String nodeName, String includeFields, String color, Tree treeNode) throws ServiceException, FolderNodeIgnoredException {
+    private void handleRemoteFolderContent(String serverName, String ownerId, int itemId, String nodeName, String[] includeFields, String color, Tree treeNode) throws ServiceException, FolderNodeIgnoredException {
         if (mAuthToken != null) {
             try {
                 DefaultHttpClient httpClient = new DefaultHttpClient();
@@ -740,8 +842,10 @@ public abstract class ContactsCrawler {
                 HashMap<String, Object> data = new HashMap<String, Object>();
                 data.put("account", ownerId);
                 data.put("item", itemId);
-                data.put("include_fields", includeFields);
+                data.put("includeFields", includeFields);
                 data.put("tree", mAsTree);
+                data.put("debug", mDebug);
+                data.put("existing", mExisting);
 
                 Gson gson = new Gson();
 
@@ -754,20 +858,25 @@ public abstract class ContactsCrawler {
 
                 if (resp.getStatusLine().getStatusCode() == 200) {
 
+                    RemoteResponse r = gson.fromJson(json, RemoteResponse.class);
                     if (mAsTree) {
-                        Tree remoteTree = gson.fromJson(json, Tree.class);
-                        treeNode.merge(remoteTree, nodeName, color);
+                        r.mergeIn(treeNode, nodeName, color);
                     } else {
-                        Collection remoteCollection = gson.fromJson(json, Collection.class);
-                        mCollection.merge(remoteCollection);
+                        r.mergeIn(mCollection);
                     }
+                    r.copyExisting(mExistingCollection, mExisting);
 
                 } else {
-                    Type type = new TypeToken<HashMap<String, String>>(){}.getType();
-                    Map<String, String> ret = gson.fromJson(json, type);
+                    try {
+                        Type type = new TypeToken<HashMap<String, String>>(){}.getType();
+                        Map<String, String> ret = gson.fromJson(json, type);
 
-    			    mLogger.warn("Request for remote folder returned an error: " + ret.get("error"));
-                    throw new FolderNodeIgnoredException();
+        			    mLogger.warn("Request for remote folder returned an error: " + ret.get("error"));
+                        throw new FolderNodeIgnoredException();
+                    } catch (JsonParseException e) {
+                        mLogger.warn("Request for remote folder failed, JSON parse error: "+e.getMessage());
+                        throw new FolderNodeIgnoredException();
+                    }
     		    }
 
             } catch (IOException e) {
@@ -779,5 +888,13 @@ public abstract class ContactsCrawler {
             mLogger.warn("Can't get remote folder, auth token is null (id: " + itemId + ", account: " + ownerId + ", server: " + serverName + ")");
             throw new FolderNodeIgnoredException();
         }
+    }
+
+    public RemoteResponse makeResponse(Collection collection) {
+        return new RemoteResponse(collection);
+    }
+
+    public RemoteResponse makeResponse(Tree tree) {
+        return new RemoteResponse(tree);
     }
 }

@@ -49,6 +49,7 @@ public class ListsFetcher {
         private String mName;
         private String mEmail;
         private Set<Member> mMembers = Sets.newHashSet();
+        public boolean mAddToExisting = false;
 
         DistributionList(Group group) throws ServiceException {
             mId = group.getId();
@@ -60,10 +61,17 @@ public class ListsFetcher {
             Set<String> nestedGroups = Sets.newHashSet();
             nestedGroups.add(group.getMail());
 
-            handleMembers(group, nestedGroups, mId);
+            String ref = "dl:" + mId + ":" + mId;
+
+            if (mExisting.contains(ref)) {
+                mAddToExisting = true;
+                mExisting.remove(ref);
+            }
+
+            handleMembers(group, nestedGroups, ref);
         }
 
-        private void handleMembers(Group group, Set<String> nestedGroups, String groupId) throws ServiceException {
+        private void handleMembers(Group group, Set<String> nestedGroups, String ref) throws ServiceException {
             Provisioning prov = Provisioning.getInstance();
             String[] members = group.getAllMembers();
 
@@ -75,7 +83,12 @@ public class ListsFetcher {
                     Group nested = prov.getGroup(Key.DistributionListBy.name, groupMember);
                     if (nested != null && !nestedGroups.contains(groupMember)) {
                         nestedGroups.add(groupMember);
-                        handleMembers(nested, nestedGroups, nested.getId());
+                        String nestedRef = "dl:" + mId + ":" + nested.getId();
+                        if (mExisting.contains(nestedRef)) {
+                            mAddToExisting = true;
+                            mExisting.remove(nestedRef);
+                        }
+                        handleMembers(nested, nestedGroups, nestedRef);
                         continue;
                     } else {
                         // something else or already handled, ignore
@@ -84,7 +97,7 @@ public class ListsFetcher {
                     }
                 }
 
-                Member member = new Member(groupMember, acct.getGivenName(), acct.getSn(), groupId);
+                Member member = new Member(groupMember, acct.getGivenName(), acct.getSn(), ref);
                 mMembers.add(member);
             }
         }
@@ -105,14 +118,14 @@ public class ListsFetcher {
     class Member {
         private String mEmail;
         private Map<String, String> mProperties = new HashMap<String, String>();
-        private String mSourceType = "zimbra";
+        private String mSourceType = "zimbra-dl";
         private String mSourceRef;
 
-        Member(String member, String firstName, String lastName, String groupId) {
+        Member(String member, String firstName, String lastName, String ref) {
             mEmail = member;
             mProperties.put("firstName", firstName != null ? firstName : "");
             mProperties.put("lastName", lastName != null ? lastName : "");
-            mSourceRef = "dl:" + groupId;
+            mSourceRef = ref;
         }
 
         void toElement(Element m) {
@@ -129,15 +142,14 @@ public class ListsFetcher {
     Logger mLogger;
     UserSettings mSettings;
     Account mAccount;
+    Set<String> mExisting;
+    public ListsCollection mExistingCollection = new ListsCollection();
 
-    public ListsFetcher(Account account) throws ServiceException {
-        this(account, false);
-    }
-
-    public ListsFetcher(Account account, boolean debug) throws ServiceException {
+    public ListsFetcher(Account account, boolean debug, Set<String> existing) throws ServiceException {
         mAccount = account;
         mSettings = new UserSettings(account);
         mLogger = new Logger(debug);
+        mExisting = existing;
     }
 
     private boolean shouldInclude(Group group) {
@@ -195,6 +207,8 @@ public class ListsFetcher {
                 if (shouldInclude((Group) entry)) {
                     DistributionList list = new DistributionList((Group) entry);
                     collection.add(list);
+
+                    if (list.mAddToExisting) mExistingCollection.add(list);
                 }
             }
         } else {
@@ -204,6 +218,8 @@ public class ListsFetcher {
                     if (shouldInclude(group)) {
                         DistributionList list = new DistributionList(group);
                         collection.add(list);
+
+                        if (list.mAddToExisting) mExistingCollection.add(list);
                     }
                 }
             }

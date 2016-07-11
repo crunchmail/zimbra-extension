@@ -1,6 +1,8 @@
 package com.crunchmail.extension.http.handlers;
 
-import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.StringTokenizer;
@@ -30,9 +32,23 @@ import com.crunchmail.extension.Logger;
 import com.crunchmail.extension.ContactsFetcher;
 import com.crunchmail.extension.ContactsCrawler.Collection;
 import com.crunchmail.extension.ContactsCrawler.Tree;
+import com.crunchmail.extension.ContactsCrawler.RemoteResponse;
 
 
 public class RemoteFolderHandler extends ExtensionHttpHandler {
+
+    class FolderRequest {
+        public boolean tree = false;
+        public String account;
+        public int item = 0;
+        public String[] includeFields;
+        public Set<String> existing = new HashSet<String>();
+        public boolean debug = false;
+
+        public boolean validate() {
+            return (account != null) && (item != 0) && (includeFields != null && includeFields.length != 0);
+        }
+    }
 
     private HttpServletResponse mResponse;
     private OperationContext mOctxt;
@@ -105,30 +121,32 @@ public class RemoteFolderHandler extends ExtensionHttpHandler {
            sb.append(s);
         }
 
-        Type type = new TypeToken<Map<String, String>>(){}.getType();
-        Map<String, String> req = gson.fromJson(sb.toString(), type);
+        FolderRequest req = gson.fromJson(sb.toString(), FolderRequest.class);
 
         // Validate the request
-        if (!req.containsKey("tree") || !req.containsKey("account") || !req.containsKey("item") || !req.containsKey("include_fields")) {
+        if (!req.validate()) {
            sendResponse("Request badly formatted. Missing required attributes.", HttpServletResponse.SC_BAD_REQUEST);
         } else {
 
             try {
-                mLogger.debug("Remove server asking for folder content (account: "+req.get("account")+", item: "+req.get("item")+", remote account: "+mOctxt.getAuthenticatedUser().getId()+")");
-                Account account = Provisioning.getInstance().getAccount(req.get("account"));
-                Mailbox mbox = MailboxManager.getInstance().getMailboxByAccountId(req.get("account"));
-                ItemId iid = new ItemId(req.get("account"), Integer.parseInt(req.get("item")));
+                mLogger.debug("Remote server asking for folder content (account: "+req.account+", item: "+req.item+", remote account: "+mOctxt.getAuthenticatedUser().getId()+")");
+                Account account = Provisioning.getInstance().getAccount(req.account);
+                Mailbox mbox = MailboxManager.getInstance().getMailboxByAccountId(req.account);
+                ItemId iid = new ItemId(req.account, req.item);
 
                 if (isAuthorized(mbox, iid)) {
-                    String[] includeFieldsDefault = req.get("include_fields").split(",");
-                    ContactsFetcher fetcher = new ContactsFetcher(mbox, account, true, includeFieldsDefault, true);
+                    ContactsFetcher fetcher = new ContactsFetcher(mbox, account, req.debug, req.existing, req.includeFields, true);
 
-                    if (Boolean.parseBoolean(req.get("tree"))) {
+                    if (req.tree) {
                         Tree tree = fetcher.fetchTree(iid);
-                        sendResponse(tree);
+                        // sendResponse(tree);
+                        RemoteResponse resp = fetcher.makeResponse(tree);
+                        sendResponse(resp);
                     } else {
                         Collection collection = fetcher.fetchCollection(iid);
-                        sendResponse(collection);
+                        // sendResponse(collection);
+                        RemoteResponse resp = fetcher.makeResponse(collection);
+                        sendResponse(resp);
                     }
                 } else {
                     sendResponse("Not authorized to access requested item.", HttpServletResponse.SC_UNAUTHORIZED);
