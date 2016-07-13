@@ -72,14 +72,22 @@ public class ListsFetcher {
         }
 
         private void handleMembers(Group group, Set<String> nestedGroups, String ref) throws ServiceException {
+            mLogger.debug("LIST: " + group.getMail());
+
             Provisioning prov = Provisioning.getInstance();
             String[] members = group.getAllMembers();
 
             for (String groupMember : members) {
 
+                mLogger.debug("MEMBER: " + groupMember);
+
                 Account acct = prov.getAccount(groupMember);
-                if (acct == null) {
-                    // not an account, probably another list
+                if (acct != null) {
+                    Member member = new Member(groupMember, acct.getGivenName(), acct.getSn(), ref);
+                    mMembers.add(member);
+                } else {
+                    // not an account, either a static member or another list
+                    // first test for another list
                     Group nested = prov.getGroup(Key.DistributionListBy.name, groupMember);
                     if (nested != null && !nestedGroups.contains(groupMember)) {
                         nestedGroups.add(groupMember);
@@ -89,16 +97,16 @@ public class ListsFetcher {
                             mExisting.remove(nestedRef);
                         }
                         handleMembers(nested, nestedGroups, nestedRef);
-                        continue;
+                    } else if (nested != null) {
+                        // already handled, ignore
+                        mLogger.debug("Ignoring member in list " + group.getMail() + ". Nested group already handled: " + groupMember);
                     } else {
-                        // something else or already handled, ignore
-                        mLogger.debug("Ignoring member in list " + group.getMail() + ". Either a nested group already handled or an unknown type: " + groupMember);
-                        continue;
+                        // static member
+                        mLogger.debug("STATIC MEMBER: " + groupMember);
+                        Member member = new Member(groupMember, null, null, ref);
+                        mMembers.add(member);
                     }
                 }
-
-                Member member = new Member(groupMember, acct.getGivenName(), acct.getSn(), ref);
-                mMembers.add(member);
             }
         }
 
