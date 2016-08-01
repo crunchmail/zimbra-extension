@@ -142,8 +142,8 @@ public class ListsFetcher {
             for (Map.Entry<String, String> property : mProperties.entrySet()) {
                 p.addAttribute(property.getKey(), property.getValue());
             }
-            m.addAttribute("sourceType", mSourceType);
-            m.addAttribute("sourceRef", mSourceRef);
+            m.addAttribute("source_type", mSourceType);
+            m.addAttribute("source_ref", mSourceRef);
         }
     }
 

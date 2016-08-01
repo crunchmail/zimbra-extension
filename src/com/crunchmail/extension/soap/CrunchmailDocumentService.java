@@ -29,6 +29,11 @@ public class CrunchmailDocumentService implements DocumentService{
     public void registerHandlers(DocumentDispatcher dispatcher) {
 
         dispatcher.registerHandler(
+            QName.get("GetVersionRequest", namespace),
+            new GetVersion()
+        );
+
+        dispatcher.registerHandler(
             QName.get("GetContactsRequest", namespace),
             new GetContacts()
         );

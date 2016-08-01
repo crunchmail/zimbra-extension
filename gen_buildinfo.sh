@@ -9,6 +9,7 @@ package $package;
 public class BuildInfo
 {
     public final static String COMMIT="$(git rev-parse HEAD)";
+    public final static String COMMIT_SHORT="$(git rev-parse --short HEAD)";
     public final static String VERSION="$version";
 }
 EOF

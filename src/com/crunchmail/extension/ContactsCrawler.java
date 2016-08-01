@@ -407,8 +407,8 @@ public abstract class ContactsCrawler {
                 t.addAttribute("name", tag);
             }
 
-            c.addAttribute("sourceType", mSourceType);
-            c.addAttribute("sourceRef", mSourceRef);
+            c.addAttribute("source_type", mSourceType);
+            c.addAttribute("source_ref", mSourceRef);
         }
     }
 
